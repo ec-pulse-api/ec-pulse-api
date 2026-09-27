@@ -1,7 +1,6 @@
-import json
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import httpx
 import psycopg
@@ -16,6 +15,18 @@ CREATE TABLE IF NOT EXISTS monitors (
     last_checked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS price_history (
+    id BIGSERIAL PRIMARY KEY,
+    monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+    price DOUBLE PRECISION,
+    currency TEXT,
+    captured_at TIMESTAMPTZ NOT NULL,
+    source_url TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_history_monitor_captured
+    ON price_history (monitor_id, captured_at DESC);
 """
 
 
@@ -97,7 +108,12 @@ async def run_due_monitors() -> dict:
         for monitor_id, url, interval, webhook_url, old_price in rows:
             try:
                 data = await fetch_product(url)
-                new_price = data.get("pricing", {}).get("price")
+                pricing = data.get("pricing", {})
+                new_price = pricing.get("price")
+                currency = pricing.get("currency")
+                source = data.get("source", {})
+                source_url = source.get("url") or url
+
                 event = None
                 if old_price is not None and new_price is not None and new_price != old_price:
                     event = {
@@ -105,7 +121,12 @@ async def run_due_monitors() -> dict:
                         "monitor_id": monitor_id,
                         "old_price": old_price,
                         "new_price": new_price,
+                        "currency": currency,
                         "url": url,
+                        "source": {
+                            "site": source.get("site"),
+                            "url": source_url,
+                        },
                         "captured_at": data["captured_at"],
                     }
                     response = await client.post(webhook_url, json=event)
@@ -113,6 +134,18 @@ async def run_due_monitors() -> dict:
                     changed += 1
 
                 with psycopg.connect(_db_url()) as conn:
+                    conn.execute(
+                        """INSERT INTO price_history
+                           (monitor_id, price, currency, captured_at, source_url)
+                           VALUES (%s, %s, %s, %s, %s)""",
+                        (
+                            monitor_id,
+                            new_price,
+                            currency,
+                            data["captured_at"],
+                            source_url,
+                        ),
+                    )
                     conn.execute(
                         """UPDATE monitors
                            SET last_price = %s, last_checked_at = %s
