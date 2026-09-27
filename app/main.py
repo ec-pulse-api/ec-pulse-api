@@ -18,8 +18,9 @@ from app.services.monitor_store import (
     run_due_monitors,
 )
 from app.services.product_cache import fetch_product_cached
+from app.services.product_search import search_products
 
-app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.7.0")
+app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.8.0")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
@@ -29,6 +30,12 @@ class ProductRequest(BaseModel):
 
 class ProductCompareRequest(BaseModel):
     urls: list[HttpUrl] = Field(min_length=2, max_length=20)
+
+
+class ProductSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=200)
+    marketplaces: list[str] = Field(default=["amazon", "rakuten", "yahoo"], min_length=1, max_length=3)
+    limit: int = Field(default=5, ge=1, le=10)
 
 
 class MonitorRequest(BaseModel):
@@ -69,11 +76,12 @@ def _charge(api_key: str, endpoint: str, credits: int = 1):
 def root():
     return {
         "name": "EC Pulse API",
-        "version": "0.7.0",
+        "version": "0.8.0",
         "status": "ok",
         "docs": "/docs",
         "health": "/health",
         "product_endpoint": "GET /v1/products?url=...",
+        "search_endpoint": "POST /v1/products/search",
         "compare_endpoint": "POST /v1/products/compare",
         "monitor_endpoint": "POST /v1/monitors",
         "history_endpoint": "GET /v1/monitors/{monitor_id}/history",
@@ -99,6 +107,19 @@ async def product_post(request: ProductRequest, api_key: str = Depends(get_api_k
     return await _fetch_product_or_http_error(str(request.url))
 
 
+@app.post("/v1/products/search")
+async def product_search(request: ProductSearchRequest, api_key: str = Depends(get_api_key)):
+    marketplaces = [marketplace.lower() for marketplace in request.marketplaces]
+    allowed = {"amazon", "rakuten", "yahoo"}
+    if any(marketplace not in allowed for marketplace in marketplaces):
+        raise HTTPException(status_code=400, detail="marketplaces must contain only amazon, rakuten, yahoo")
+    _charge(api_key, "POST /v1/products/search", request.limit * len(marketplaces))
+    try:
+        return await search_products(request.query, marketplaces, request.limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Product search failed: {type(exc).__name__}") from exc
+
+
 @app.post("/v1/products/compare")
 async def product_compare(request: ProductCompareRequest, api_key: str = Depends(get_api_key)):
     urls = [str(url) for url in request.urls]
@@ -110,19 +131,10 @@ async def product_compare(request: ProductCompareRequest, api_key: str = Depends
     products = []
     for url, result in zip(urls, results):
         if isinstance(result, Exception):
-            products.append({
-                "url": url,
-                "ok": False,
-                "error": type(result).__name__,
-            })
+            products.append({"url": url, "ok": False, "error": type(result).__name__})
             continue
         payload, cache_hit = result
-        products.append({
-            "url": url,
-            "ok": True,
-            "cache": {"hit": cache_hit, "ttl_seconds": 300},
-            "product": payload,
-        })
+        products.append({"url": url, "ok": True, "cache": {"hit": cache_hit, "ttl_seconds": 300}, "product": payload})
     successful = [item["product"] for item in products if item["ok"]]
     ranked = sorted(
         successful,
