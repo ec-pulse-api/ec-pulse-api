@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 from app.services.monitor_store import create_monitor, list_monitors, run_due_monitors
 from app.services.product_parser import fetch_product
+from app.services.supabase_client import check_supabase
 
 app = FastAPI(
     title="EC Pulse API",
@@ -52,6 +53,16 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/health/supabase", dependencies=[Depends(require_api_key)])
+async def supabase_health():
+    try:
+        return await check_supabase()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Supabase connectivity check failed: {type(exc).__name__}") from exc
 
 
 @app.post("/v1/products", dependencies=[Depends(require_api_key)])
