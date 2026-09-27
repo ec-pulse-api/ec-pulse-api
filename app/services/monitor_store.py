@@ -24,7 +24,6 @@ CREATE TABLE IF NOT EXISTS price_history (
     captured_at TIMESTAMPTZ NOT NULL,
     source_url TEXT NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_price_history_monitor_captured
     ON price_history (monitor_id, captured_at DESC);
 
@@ -35,7 +34,6 @@ CREATE TABLE IF NOT EXISTS api_accounts (
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
 );
-
 CREATE TABLE IF NOT EXISTS api_usage (
     id BIGSERIAL PRIMARY KEY,
     api_key_hash TEXT NOT NULL,
@@ -43,7 +41,6 @@ CREATE TABLE IF NOT EXISTS api_usage (
     credits INTEGER NOT NULL,
     created_at TIMESTAMPTZ NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS idx_api_usage_key_created
     ON api_usage (api_key_hash, created_at DESC);
 """
@@ -68,8 +65,7 @@ def ensure_api_account(api_key: str) -> dict:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
         row = conn.execute(
-            """SELECT plan, credits_balance, created_at, updated_at
-               FROM api_accounts WHERE api_key_hash = %s""",
+            "SELECT plan, credits_balance, created_at, updated_at FROM api_accounts WHERE api_key_hash = %s",
             (key_hash,),
         ).fetchone()
         if not row:
@@ -81,12 +77,7 @@ def ensure_api_account(api_key: str) -> dict:
             )
             conn.commit()
             return {"plan": "free", "credits_balance": 100, "created_at": now.isoformat()}
-    return {
-        "plan": row[0],
-        "credits_balance": row[1],
-        "created_at": row[2].isoformat(),
-        "updated_at": row[3].isoformat(),
-    }
+    return {"plan": row[0], "credits_balance": row[1], "created_at": row[2].isoformat(), "updated_at": row[3].isoformat()}
 
 def consume_credit(api_key: str, endpoint: str, credits: int = 1) -> dict:
     if credits < 1:
@@ -96,30 +87,29 @@ def consume_credit(api_key: str, endpoint: str, credits: int = 1) -> dict:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
         row = conn.execute(
-            """SELECT credits_balance FROM api_accounts
-               WHERE api_key_hash = %s FOR UPDATE""",
+            "SELECT credits_balance FROM api_accounts WHERE api_key_hash = %s FOR UPDATE",
             (key_hash,),
         ).fetchone()
         if not row:
+            remaining = 100 - credits
+            if remaining < 0:
+                raise RuntimeError("Insufficient API credits")
             conn.execute(
                 """INSERT INTO api_accounts
                    (api_key_hash, plan, credits_balance, created_at, updated_at)
                    VALUES (%s, 'free', %s, %s, %s)""",
-                (key_hash, max(0, 100 - credits), now, now),
+                (key_hash, remaining, now, now),
             )
-            remaining = max(0, 100 - credits)
         else:
             if row[0] < credits:
                 raise RuntimeError("Insufficient API credits")
             remaining = row[0] - credits
             conn.execute(
-                """UPDATE api_accounts SET credits_balance = %s, updated_at = %s
-                   WHERE api_key_hash = %s""",
+                "UPDATE api_accounts SET credits_balance = %s, updated_at = %s WHERE api_key_hash = %s",
                 (remaining, now, key_hash),
             )
         conn.execute(
-            """INSERT INTO api_usage (api_key_hash, endpoint, credits, created_at)
-               VALUES (%s, %s, %s, %s)""",
+            "INSERT INTO api_usage (api_key_hash, endpoint, credits, created_at) VALUES (%s, %s, %s, %s)",
             (key_hash, endpoint, credits, now),
         )
         conn.commit()
@@ -130,8 +120,7 @@ def get_account_usage(api_key: str) -> dict:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
         account = conn.execute(
-            """SELECT plan, credits_balance, created_at, updated_at
-               FROM api_accounts WHERE api_key_hash = %s""",
+            "SELECT plan, credits_balance, created_at, updated_at FROM api_accounts WHERE api_key_hash = %s",
             (key_hash,),
         ).fetchone()
         if not account:
@@ -142,17 +131,11 @@ def get_account_usage(api_key: str) -> dict:
                GROUP BY endpoint ORDER BY SUM(credits) DESC""",
             (key_hash,),
         ).fetchall()
-        total = sum(r[1] for r in rows)
     return {
-        "plan": account[0],
-        "credits_balance": account[1],
-        "total_credits_used": total,
-        "created_at": account[2].isoformat(),
-        "updated_at": account[3].isoformat(),
-        "usage": [
-            {"endpoint": r[0], "credits": r[1], "requests": r[2]}
-            for r in rows
-        ],
+        "plan": account[0], "credits_balance": account[1],
+        "total_credits_used": sum(r[1] for r in rows),
+        "created_at": account[2].isoformat(), "updated_at": account[3].isoformat(),
+        "usage": [{"endpoint": r[0], "credits": r[1], "requests": r[2]} for r in rows],
     }
 
 def create_monitor(url: str, interval_minutes: int, webhook_url: str) -> dict:
@@ -161,81 +144,90 @@ def create_monitor(url: str, interval_minutes: int, webhook_url: str) -> dict:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
         conn.execute(
-            """INSERT INTO monitors
-               (id, url, interval_minutes, webhook_url, created_at)
-               VALUES (%s, %s, %s, %s, %s)""",
+            "INSERT INTO monitors (id, url, interval_minutes, webhook_url, created_at) VALUES (%s, %s, %s, %s, %s)",
             (monitor_id, url, interval_minutes, webhook_url, now),
         )
         conn.commit()
-    return {
-        "id": monitor_id,
-        "url": url,
-        "interval_minutes": interval_minutes,
-        "webhook_url": webhook_url,
-        "status": "active",
-        "created_at": now.isoformat(),
-    }
+    return {"id": monitor_id, "url": url, "interval_minutes": interval_minutes, "webhook_url": webhook_url, "status": "active", "created_at": now.isoformat()}
 
 def list_monitors() -> list[dict]:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
         rows = conn.execute(
-            """SELECT id, url, interval_minutes, webhook_url,
-                      last_price, last_checked_at, created_at
+            """SELECT id, url, interval_minutes, webhook_url, last_price, last_checked_at, created_at
                FROM monitors ORDER BY created_at DESC"""
         ).fetchall()
     return [
-        {
-            "id": r[0],
-            "url": r[1],
-            "interval_minutes": r[2],
-            "webhook_url": r[3],
-            "last_price": r[4],
-            "last_checked_at": r[5].isoformat() if r[5] else None,
-            "created_at": r[6].isoformat(),
-        }
+        {"id": r[0], "url": r[1], "interval_minutes": r[2], "webhook_url": r[3],
+         "last_price": r[4], "last_checked_at": r[5].isoformat() if r[5] else None,
+         "created_at": r[6].isoformat()}
         for r in rows
     ]
+
+def _history_rows(conn, monitor_id: str, limit: int):
+    return conn.execute(
+        """SELECT price, currency, captured_at, source_url
+           FROM price_history WHERE monitor_id = %s
+           ORDER BY captured_at DESC LIMIT %s""",
+        (monitor_id, limit),
+    ).fetchall()
 
 def get_price_history(monitor_id: str, limit: int = 100) -> dict:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
         monitor = conn.execute(
-            """SELECT id, url, last_price, last_checked_at
-               FROM monitors WHERE id = %s""",
+            "SELECT id, url, last_price, last_checked_at FROM monitors WHERE id = %s",
             (monitor_id,),
         ).fetchone()
         if not monitor:
             raise KeyError(monitor_id)
-        rows = conn.execute(
-            """SELECT price, currency, captured_at, source_url
-               FROM price_history WHERE monitor_id = %s
-               ORDER BY captured_at DESC LIMIT %s""",
-            (monitor_id, limit),
-        ).fetchall()
-    points = [
-        {"price": r[0], "currency": r[1], "captured_at": r[2].isoformat(), "source_url": r[3]}
-        for r in rows
-    ]
+        rows = _history_rows(conn, monitor_id, limit)
+    points = [{"price": r[0], "currency": r[1], "captured_at": r[2].isoformat(), "source_url": r[3]} for r in rows]
     numeric = [p["price"] for p in points if p["price"] is not None]
     current = numeric[0] if numeric else monitor[2]
     lowest = min(numeric) if numeric else None
     highest = max(numeric) if numeric else None
     first = numeric[-1] if numeric else None
-    change_percent = None
-    if first not in (None, 0) and current is not None:
-        change_percent = round(((current - first) / first) * 100, 2)
+    change_percent = round(((current - first) / first) * 100, 2) if first not in (None, 0) and current is not None else None
     return {
-        "monitor": {
-            "id": monitor[0], "url": monitor[1], "last_price": monitor[2],
-            "last_checked_at": monitor[3].isoformat() if monitor[3] else None,
-        },
-        "summary": {
-            "points": len(points), "current_price": current,
-            "lowest_price": lowest, "highest_price": highest,
-            "change_percent": change_percent,
-        },
+        "monitor": {"id": monitor[0], "url": monitor[1], "last_price": monitor[2], "last_checked_at": monitor[3].isoformat() if monitor[3] else None},
+        "summary": {"points": len(points), "current_price": current, "lowest_price": lowest, "highest_price": highest, "change_percent": change_percent},
         "history": points,
+    }
+
+def get_price_opportunity(monitor_id: str, limit: int = 100) -> dict:
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        monitor = conn.execute(
+            "SELECT id, url, last_price, last_checked_at FROM monitors WHERE id = %s",
+            (monitor_id,),
+        ).fetchone()
+        if not monitor:
+            raise KeyError(monitor_id)
+        rows = _history_rows(conn, monitor_id, limit)
+    prices = [r[0] for r in rows if r[0] is not None]
+    current = prices[0] if prices else monitor[2]
+    lowest = min(prices) if prices else None
+    highest = max(prices) if prices else None
+    baseline = sum(prices) / len(prices) if prices else None
+    discount_vs_high = round(((highest - current) / highest) * 100, 2) if highest and current is not None else None
+    discount_vs_average = round(((baseline - current) / baseline) * 100, 2) if baseline and current is not None else None
+    is_historical_low = bool(current is not None and lowest is not None and current <= lowest)
+    signal = "historical_low" if is_historical_low else "below_average" if discount_vs_average and discount_vs_average > 10 else "normal"
+    return {
+        "monitor_id": monitor_id,
+        "url": monitor[1],
+        "current_price": current,
+        "currency": rows[0][1] if rows else None,
+        "metrics": {
+            "historical_low": lowest,
+            "historical_high": highest,
+            "average_price": round(baseline, 2) if baseline is not None else None,
+            "discount_vs_high_percent": discount_vs_high,
+            "discount_vs_average_percent": discount_vs_average,
+        },
+        "signal": signal,
+        "captured_at": monitor[3].isoformat() if monitor[3] else None,
     }
 
 async def run_due_monitors() -> dict:
@@ -282,8 +274,7 @@ async def run_due_monitors() -> dict:
                         (monitor_id, new_price, currency, data["captured_at"], source_url),
                     )
                     conn.execute(
-                        """UPDATE monitors SET last_price = %s, last_checked_at = %s
-                           WHERE id = %s""",
+                        "UPDATE monitors SET last_price = %s, last_checked_at = %s WHERE id = %s",
                         (new_price, now, monitor_id),
                     )
                     conn.commit()
