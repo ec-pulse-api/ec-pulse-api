@@ -1,4 +1,6 @@
+import hashlib
 import os
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -34,6 +36,18 @@ CREATE TABLE IF NOT EXISTS api_accounts (
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    api_key_hash TEXT PRIMARY KEY,
+    key_prefix TEXT NOT NULL,
+    account_key_hash TEXT NOT NULL REFERENCES api_accounts(api_key_hash) ON DELETE CASCADE,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL,
+    last_used_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_account
+    ON api_keys (account_key_hash, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS api_usage (
     id BIGSERIAL PRIMARY KEY,
     api_key_hash TEXT NOT NULL,
@@ -51,16 +65,50 @@ def _db_url() -> str:
         raise RuntimeError("DATABASE_URL is not configured")
     return url
 
-def _init(conn):
-    conn.execute(SCHEMA)
-    conn.commit()
-
 def _account_hash(api_key: str) -> str:
-    import hashlib
     return hashlib.sha256(api_key.encode()).hexdigest()
 
+def _init(conn):
+    conn.execute(SCHEMA)
+    master_key = os.getenv("EC_PULSE_API_KEY")
+    if master_key:
+        key_hash = _account_hash(master_key)
+        now = datetime.now(timezone.utc)
+        conn.execute(
+            """INSERT INTO api_accounts
+               (api_key_hash, plan, credits_balance, created_at, updated_at)
+               VALUES (%s, 'free', 100, %s, %s)
+               ON CONFLICT (api_key_hash) DO NOTHING""",
+            (key_hash, now, now),
+        )
+        conn.execute(
+            """INSERT INTO api_keys
+               (api_key_hash, key_prefix, account_key_hash, active, created_at)
+               VALUES (%s, %s, %s, TRUE, %s)
+               ON CONFLICT (api_key_hash) DO NOTHING""",
+            (key_hash, master_key[:12], key_hash, now),
+        )
+    conn.commit()
+
+def validate_api_key(api_key: str) -> bool:
+    key_hash = _account_hash(api_key)
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        row = conn.execute(
+            "SELECT active FROM api_keys WHERE api_key_hash = %s",
+            (key_hash,),
+        ).fetchone()
+        if not row or not row[0]:
+            return False
+        now = datetime.now(timezone.utc)
+        conn.execute(
+            "UPDATE api_keys SET last_used_at = %s WHERE api_key_hash = %s",
+            (now, key_hash),
+        )
+        conn.commit()
+    return True
+
 def ensure_api_account(api_key: str) -> dict:
-    now = datetime.now(timezone.utc)
     key_hash = _account_hash(api_key)
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
@@ -69,15 +117,81 @@ def ensure_api_account(api_key: str) -> dict:
             (key_hash,),
         ).fetchone()
         if not row:
-            conn.execute(
-                """INSERT INTO api_accounts
-                   (api_key_hash, plan, credits_balance, created_at, updated_at)
-                   VALUES (%s, 'free', 100, %s, %s)""",
-                (key_hash, now, now),
-            )
-            conn.commit()
-            return {"plan": "free", "credits_balance": 100, "created_at": now.isoformat()}
-    return {"plan": row[0], "credits_balance": row[1], "created_at": row[2].isoformat(), "updated_at": row[3].isoformat()}
+            raise RuntimeError("API key is not provisioned")
+    return {
+        "plan": row[0],
+        "credits_balance": row[1],
+        "created_at": row[2].isoformat(),
+        "updated_at": row[3].isoformat(),
+    }
+
+def create_api_key(plan: str = "free", credits: int = 100) -> dict:
+    if plan not in {"free", "pro", "business"}:
+        raise ValueError("plan must be free, pro, or business")
+    if credits < 0:
+        raise ValueError("credits must be non-negative")
+
+    raw_key = f"ecp_live_{secrets.token_urlsafe(32)}"
+    key_hash = _account_hash(raw_key)
+    now = datetime.now(timezone.utc)
+
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        conn.execute(
+            """INSERT INTO api_accounts
+               (api_key_hash, plan, credits_balance, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (key_hash, plan, credits, now, now),
+        )
+        conn.execute(
+            """INSERT INTO api_keys
+               (api_key_hash, key_prefix, account_key_hash, active, created_at)
+               VALUES (%s, %s, %s, TRUE, %s)""",
+            (key_hash, raw_key[:12], key_hash, now),
+        )
+        conn.commit()
+
+    return {
+        "api_key": raw_key,
+        "key_prefix": raw_key[:12],
+        "plan": plan,
+        "credits_balance": credits,
+        "created_at": now.isoformat(),
+        "warning": "Store this API key securely. It will not be shown again.",
+    }
+
+def list_api_keys() -> list[dict]:
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        rows = conn.execute(
+            """SELECT k.key_prefix, k.active, k.created_at, k.last_used_at, k.account_key_hash,
+                      a.plan, a.credits_balance
+               FROM api_keys k
+               JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+               ORDER BY k.created_at DESC"""
+        ).fetchall()
+    return [
+        {
+            "key_prefix": r[0],
+            "active": r[1],
+            "created_at": r[2].isoformat(),
+            "last_used_at": r[3].isoformat() if r[3] else None,
+            "plan": r[5],
+            "credits_balance": r[6],
+        }
+        for r in rows
+    ]
+
+def revoke_api_key(api_key: str) -> bool:
+    key_hash = _account_hash(api_key)
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        cur = conn.execute(
+            "UPDATE api_keys SET active = FALSE WHERE api_key_hash = %s",
+            (key_hash,),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 def consume_credit(api_key: str, endpoint: str, credits: int = 1) -> dict:
     if credits < 1:
@@ -87,27 +201,26 @@ def consume_credit(api_key: str, endpoint: str, credits: int = 1) -> dict:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
         row = conn.execute(
-            "SELECT credits_balance FROM api_accounts WHERE api_key_hash = %s FOR UPDATE",
+            """SELECT a.credits_balance
+               FROM api_accounts a
+               JOIN api_keys k ON k.account_key_hash = a.api_key_hash
+               WHERE k.api_key_hash = %s AND k.active = TRUE
+               FOR UPDATE""",
             (key_hash,),
         ).fetchone()
         if not row:
-            remaining = 100 - credits
-            if remaining < 0:
-                raise RuntimeError("Insufficient API credits")
-            conn.execute(
-                """INSERT INTO api_accounts
-                   (api_key_hash, plan, credits_balance, created_at, updated_at)
-                   VALUES (%s, 'free', %s, %s, %s)""",
-                (key_hash, remaining, now, now),
-            )
-        else:
-            if row[0] < credits:
-                raise RuntimeError("Insufficient API credits")
-            remaining = row[0] - credits
-            conn.execute(
-                "UPDATE api_accounts SET credits_balance = %s, updated_at = %s WHERE api_key_hash = %s",
-                (remaining, now, key_hash),
-            )
+            raise RuntimeError("Invalid or revoked API key")
+        if row[0] < credits:
+            raise RuntimeError("Insufficient API credits")
+        remaining = row[0] - credits
+        conn.execute(
+            "UPDATE api_accounts SET credits_balance = %s, updated_at = %s WHERE api_key_hash = %s",
+            (remaining, now, key_hash),
+        )
+        conn.execute(
+            "UPDATE api_keys SET last_used_at = %s WHERE api_key_hash = %s",
+            (now, key_hash),
+        )
         conn.execute(
             "INSERT INTO api_usage (api_key_hash, endpoint, credits, created_at) VALUES (%s, %s, %s, %s)",
             (key_hash, endpoint, credits, now),
@@ -124,7 +237,7 @@ def get_account_usage(api_key: str) -> dict:
             (key_hash,),
         ).fetchone()
         if not account:
-            return {"plan": "free", "credits_balance": 100, "total_credits_used": 0, "usage": []}
+            raise RuntimeError("API key is not provisioned")
         rows = conn.execute(
             """SELECT endpoint, SUM(credits), COUNT(*)
                FROM api_usage WHERE api_key_hash = %s
@@ -132,9 +245,11 @@ def get_account_usage(api_key: str) -> dict:
             (key_hash,),
         ).fetchall()
     return {
-        "plan": account[0], "credits_balance": account[1],
+        "plan": account[0],
+        "credits_balance": account[1],
         "total_credits_used": sum(r[1] for r in rows),
-        "created_at": account[2].isoformat(), "updated_at": account[3].isoformat(),
+        "created_at": account[2].isoformat(),
+        "updated_at": account[3].isoformat(),
         "usage": [{"endpoint": r[0], "credits": r[1], "requests": r[2]} for r in rows],
     }
 
@@ -158,9 +273,7 @@ def list_monitors() -> list[dict]:
                FROM monitors ORDER BY created_at DESC"""
         ).fetchall()
     return [
-        {"id": r[0], "url": r[1], "interval_minutes": r[2], "webhook_url": r[3],
-         "last_price": r[4], "last_checked_at": r[5].isoformat() if r[5] else None,
-         "created_at": r[6].isoformat()}
+        {"id": r[0], "url": r[1], "interval_minutes": r[2], "webhook_url": r[3], "last_price": r[4], "last_checked_at": r[5].isoformat() if r[5] else None, "created_at": r[6].isoformat()}
         for r in rows
     ]
 
