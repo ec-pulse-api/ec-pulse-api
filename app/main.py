@@ -16,11 +16,12 @@ from app.services.monitor_store import (
     get_price_opportunity,
     list_monitors,
     run_due_monitors,
+    validate_api_key,
 )
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
 
-app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.8.0")
+app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.9.0")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
@@ -45,11 +46,14 @@ class MonitorRequest(BaseModel):
 
 
 def get_api_key(api_key: str | None = Depends(api_key_header)) -> str:
-    expected = os.getenv("EC_PULSE_API_KEY")
-    if not expected:
-        raise HTTPException(status_code=503, detail="API authentication is not configured")
-    if not api_key or not secrets.compare_digest(api_key, expected):
-        raise HTTPException(status_code=401, detail="Invalid API key")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing API key")
+    try:
+        valid = validate_api_key(api_key)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid or revoked API key")
     return api_key
 
 
@@ -67,16 +71,19 @@ def _charge(api_key: str, endpoint: str, credits: int = 1):
     try:
         return consume_credit(api_key, endpoint, credits)
     except RuntimeError as exc:
-        if "Insufficient API credits" in str(exc):
-            raise HTTPException(status_code=402, detail=str(exc)) from exc
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        message = str(exc)
+        if "Insufficient API credits" in message:
+            raise HTTPException(status_code=402, detail=message) from exc
+        if "Invalid or revoked API key" in message:
+            raise HTTPException(status_code=401, detail=message) from exc
+        raise HTTPException(status_code=503, detail=message) from exc
 
 
 @app.get("/")
 def root():
     return {
         "name": "EC Pulse API",
-        "version": "0.8.0",
+        "version": "0.9.0",
         "status": "ok",
         "docs": "/docs",
         "health": "/health",
