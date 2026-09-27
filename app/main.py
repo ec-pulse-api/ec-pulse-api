@@ -1,17 +1,18 @@
 import asyncio
+import hashlib
 import os
-import secrets
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
 
 from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
+from app.services.rate_limit import check_rate_limit
 
-app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.9.1")
+app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.9.2")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 class ProductRequest(BaseModel):
@@ -27,55 +28,81 @@ class MonitorRequest(BaseModel):
     interval_minutes: int = Field(default=60, ge=5, le=10080)
     webhook_url: HttpUrl
 
+def _key_hash(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode()).hexdigest()
+
 def get_api_key(api_key: str | None = Depends(api_key_header)) -> str:
-    if not api_key: raise HTTPException(status_code=401, detail="Missing API key")
-    try: valid = validate_api_key(api_key)
-    except RuntimeError as exc: raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if not valid: raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing API key")
+    try:
+        if not validate_api_key(api_key):
+            raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+        account = ensure_api_account(api_key)
+        rate = check_rate_limit(_key_hash(api_key), account["plan"])
+        if not rate["allowed"]:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded", headers={"Retry-After": str(rate["reset_seconds"]), "X-RateLimit-Limit": str(rate["limit"]), "X-RateLimit-Remaining": "0"})
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return api_key
 
 def _charge(api_key: str, endpoint: str, credits: int = 1):
     try: return consume_credit(api_key, endpoint, credits)
     except RuntimeError as exc:
-        message = str(exc)
+        message=str(exc)
         if "Insufficient API credits" in message: raise HTTPException(status_code=402, detail=message) from exc
         if "Invalid or revoked API key" in message: raise HTTPException(status_code=401, detail=message) from exc
         raise HTTPException(status_code=503, detail=message) from exc
 
+def _usage_headers(api_key: str, result: dict | None = None) -> dict[str,str]:
+    try:
+        account=ensure_api_account(api_key); rate=check_rate_limit(_key_hash(api_key),account["plan"])
+        headers={"X-RateLimit-Limit":str(rate["limit"]),"X-RateLimit-Remaining":str(rate["remaining"]),"X-RateLimit-Reset":str(rate["reset_seconds"]),"X-EC-Credits-Remaining":str(account["credits_balance"])}
+        if result: headers["X-EC-Credits-Used"]=str(result.get("credits_used",0))
+        return headers
+    except Exception: return {}
+
 async def _fetch_product_or_http_error(url: str):
     try:
-        payload, cache_hit = await fetch_product_cached(url)
-        return {**payload, "cache": {"hit": cache_hit, "ttl_seconds": 300}}
-    except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc: raise HTTPException(status_code=502, detail=f"Unable to retrieve product page: {type(exc).__name__}") from exc
+        payload,cache_hit=await fetch_product_cached(url)
+        return {**payload,"cache":{"hit":cache_hit,"ttl_seconds":300}}
+    except ValueError as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc
+    except Exception as exc: raise HTTPException(status_code=502,detail=f"Unable to retrieve product page: {type(exc).__name__}") from exc
 
 @app.get("/")
 def root():
-    return {"name":"EC Pulse API","version":"0.9.1","status":"ok","docs":"/docs","health":"/health","product_endpoint":"GET /v1/products?url=...","search_endpoint":"POST /v1/products/search","compare_endpoint":"POST /v1/products/compare","monitor_endpoint":"POST /v1/monitors","account_endpoint":"GET /v1/account"}
+    return {"name":"EC Pulse API","version":"0.9.2","status":"ok","docs":"/docs","health":"/health","pricing_model":"credit-based API with per-plan rate limits"}
 
 @app.get("/health")
 def health(): return {"status":"ok"}
 
 @app.get("/v1/products")
-async def product_get(url: HttpUrl = Query(...), api_key: str = Depends(get_api_key)):
-    _charge(api_key, "GET /v1/products"); return await _fetch_product_or_http_error(str(url))
+async def product_get(response: Response,url:HttpUrl=Query(...),api_key:str=Depends(get_api_key)):
+    charge=_charge(api_key,"GET /v1/products")
+    for k,v in _usage_headers(api_key,charge).items(): response.headers[k]=v
+    return await _fetch_product_or_http_error(str(url))
 
 @app.post("/v1/products")
-async def product_post(request: ProductRequest, api_key: str = Depends(get_api_key)):
-    _charge(api_key, "POST /v1/products"); return await _fetch_product_or_http_error(str(request.url))
+async def product_post(response: Response,request:ProductRequest,api_key:str=Depends(get_api_key)):
+    charge=_charge(api_key,"POST /v1/products")
+    for k,v in _usage_headers(api_key,charge).items(): response.headers[k]=v
+    return await _fetch_product_or_http_error(str(request.url))
 
 @app.post("/v1/products/search")
-async def product_search(request: ProductSearchRequest, api_key: str = Depends(get_api_key)):
-    marketplaces = [m.lower() for m in request.marketplaces]
-    if any(m not in {"amazon","rakuten","yahoo"} for m in marketplaces): raise HTTPException(status_code=400, detail="marketplaces must contain only amazon, rakuten, yahoo")
-    _charge(api_key, "POST /v1/products/search", request.limit * len(marketplaces))
-    try: return await search_products(request.query, marketplaces, request.limit)
-    except Exception as exc: raise HTTPException(status_code=502, detail=f"Product search failed: {type(exc).__name__}") from exc
+async def product_search(response:Response,request:ProductSearchRequest,api_key:str=Depends(get_api_key)):
+    marketplaces=[m.lower() for m in request.marketplaces]
+    if any(m not in {"amazon","rakuten","yahoo"} for m in marketplaces): raise HTTPException(status_code=400,detail="marketplaces must contain only amazon, rakuten, yahoo")
+    charge=_charge(api_key,"POST /v1/products/search",request.limit*len(marketplaces))
+    for k,v in _usage_headers(api_key,charge).items(): response.headers[k]=v
+    try: return await search_products(request.query,marketplaces,request.limit)
+    except Exception as exc: raise HTTPException(status_code=502,detail=f"Product search failed: {type(exc).__name__}") from exc
 
 @app.post("/v1/products/compare")
-async def product_compare(request: ProductCompareRequest, api_key: str = Depends(get_api_key)):
-    urls = [str(u) for u in request.urls]; _charge(api_key, "POST /v1/products/compare", len(urls))
-    results = await asyncio.gather(*(fetch_product_cached(url) for url in urls), return_exceptions=True)
+async def product_compare(response:Response,request:ProductCompareRequest,api_key:str=Depends(get_api_key)):
+    urls=[str(u) for u in request.urls]; charge=_charge(api_key,"POST /v1/products/compare",len(urls))
+    for k,v in _usage_headers(api_key,charge).items(): response.headers[k]=v
+    results=await asyncio.gather(*(fetch_product_cached(url) for url in urls),return_exceptions=True)
     products=[]
     for url,result in zip(urls,results):
         if isinstance(result,Exception): products.append({"url":url,"ok":False,"error":type(result).__name__}); continue
@@ -85,15 +112,16 @@ async def product_compare(request: ProductCompareRequest, api_key: str = Depends
     return {"count":len(products),"successful":len(successful),"results":products,"price_ranking":[{"rank":i,"url":x.get("source",{}).get("url"),"title":x.get("product",{}).get("title"),"price":x.get("pricing",{}).get("price"),"currency":x.get("pricing",{}).get("currency"),"marketplace":x.get("source",{}).get("marketplace"),"product_id":x.get("source",{}).get("product_id")} for i,x in enumerate(ranked,1)]}
 
 @app.post("/v1/monitors")
-def monitor(request: MonitorRequest, api_key: str = Depends(get_api_key)):
-    _charge(api_key,"POST /v1/monitors")
+def monitor(response:Response,request:MonitorRequest,api_key:str=Depends(get_api_key)):
+    charge=_charge(api_key,"POST /v1/monitors")
+    for k,v in _usage_headers(api_key,charge).items(): response.headers[k]=v
     try: return create_monitor(api_key=api_key,url=str(request.url),interval_minutes=request.interval_minutes,webhook_url=str(request.webhook_url))
-    except RuntimeError as exc: raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
 
 @app.get("/v1/monitors")
-def monitors(api_key: str = Depends(get_api_key)):
+def monitors(api_key:str=Depends(get_api_key)):
     try: return {"monitors":list_monitors(api_key)}
-    except RuntimeError as exc: raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
 
 @app.get("/v1/monitors/{monitor_id}/history")
 def monitor_history(monitor_id:str,limit:int=100,api_key:str=Depends(get_api_key)):
