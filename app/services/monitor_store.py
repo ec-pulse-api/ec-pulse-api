@@ -29,18 +29,15 @@ CREATE INDEX IF NOT EXISTS idx_price_history_monitor_captured
     ON price_history (monitor_id, captured_at DESC);
 """
 
-
 def _db_url() -> str:
     url = os.getenv("DATABASE_URL")
     if not url:
         raise RuntimeError("DATABASE_URL is not configured")
     return url
 
-
 def _init(conn):
     conn.execute(SCHEMA)
     conn.commit()
-
 
 def create_monitor(url: str, interval_minutes: int, webhook_url: str) -> dict:
     now = datetime.now(timezone.utc)
@@ -63,7 +60,6 @@ def create_monitor(url: str, interval_minutes: int, webhook_url: str) -> dict:
         "created_at": now.isoformat(),
     }
 
-
 def list_monitors() -> list[dict]:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
@@ -85,6 +81,61 @@ def list_monitors() -> list[dict]:
         for r in rows
     ]
 
+def get_price_history(monitor_id: str, limit: int = 100) -> dict:
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        monitor = conn.execute(
+            """SELECT id, url, last_price, last_checked_at
+               FROM monitors WHERE id = %s""",
+            (monitor_id,),
+        ).fetchone()
+        if not monitor:
+            raise KeyError(monitor_id)
+
+        rows = conn.execute(
+            """SELECT price, currency, captured_at, source_url
+               FROM price_history
+               WHERE monitor_id = %s
+               ORDER BY captured_at DESC
+               LIMIT %s""",
+            (monitor_id, limit),
+        ).fetchall()
+
+    points = [
+        {
+            "price": r[0],
+            "currency": r[1],
+            "captured_at": r[2].isoformat(),
+            "source_url": r[3],
+        }
+        for r in rows
+    ]
+
+    numeric = [p["price"] for p in points if p["price"] is not None]
+    current = numeric[0] if numeric else monitor[2]
+    lowest = min(numeric) if numeric else None
+    highest = max(numeric) if numeric else None
+    first = numeric[-1] if numeric else None
+    change_percent = None
+    if first not in (None, 0) and current is not None:
+        change_percent = round(((current - first) / first) * 100, 2)
+
+    return {
+        "monitor": {
+            "id": monitor[0],
+            "url": monitor[1],
+            "last_price": monitor[2],
+            "last_checked_at": monitor[3].isoformat() if monitor[3] else None,
+        },
+        "summary": {
+            "points": len(points),
+            "current_price": current,
+            "lowest_price": lowest,
+            "highest_price": highest,
+            "change_percent": change_percent,
+        },
+        "history": points,
+    }
 
 async def run_due_monitors() -> dict:
     from app.services.product_parser import fetch_product
@@ -114,19 +165,18 @@ async def run_due_monitors() -> dict:
                 source = data.get("source", {})
                 source_url = source.get("url") or url
 
-                event = None
                 if old_price is not None and new_price is not None and new_price != old_price:
                     event = {
                         "event": "price_changed",
                         "monitor_id": monitor_id,
                         "old_price": old_price,
                         "new_price": new_price,
+                        "change_amount": round(new_price - old_price, 2),
+                        "change_percent": round(((new_price - old_price) / old_price) * 100, 2) if old_price else None,
+                        "direction": "down" if new_price < old_price else "up",
                         "currency": currency,
                         "url": url,
-                        "source": {
-                            "site": source.get("site"),
-                            "url": source_url,
-                        },
+                        "source": {"site": source.get("site"), "url": source_url},
                         "captured_at": data["captured_at"],
                     }
                     response = await client.post(webhook_url, json=event)
@@ -138,13 +188,7 @@ async def run_due_monitors() -> dict:
                         """INSERT INTO price_history
                            (monitor_id, price, currency, captured_at, source_url)
                            VALUES (%s, %s, %s, %s, %s)""",
-                        (
-                            monitor_id,
-                            new_price,
-                            currency,
-                            data["captured_at"],
-                            source_url,
-                        ),
+                        (monitor_id, new_price, currency, data["captured_at"], source_url),
                     )
                     conn.execute(
                         """UPDATE monitors
