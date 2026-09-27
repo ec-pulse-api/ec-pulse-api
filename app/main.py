@@ -17,7 +17,7 @@ from app.services.monitor_store import (
     list_monitors,
     run_due_monitors,
 )
-from app.services.product_parser import fetch_product
+from app.services.product_cache import fetch_product_cached
 
 app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.7.0")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -48,7 +48,8 @@ def get_api_key(api_key: str | None = Depends(api_key_header)) -> str:
 
 async def _fetch_product_or_http_error(url: str):
     try:
-        return await fetch_product(url)
+        payload, cache_hit = await fetch_product_cached(url)
+        return {**payload, "cache": {"hit": cache_hit, "ttl_seconds": 300}}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -103,7 +104,7 @@ async def product_compare(request: ProductCompareRequest, api_key: str = Depends
     urls = [str(url) for url in request.urls]
     _charge(api_key, "POST /v1/products/compare", len(urls))
     results = await asyncio.gather(
-        *(fetch_product(url) for url in urls),
+        *(fetch_product_cached(url) for url in urls),
         return_exceptions=True,
     )
     products = []
@@ -115,10 +116,12 @@ async def product_compare(request: ProductCompareRequest, api_key: str = Depends
                 "error": type(result).__name__,
             })
             continue
+        payload, cache_hit = result
         products.append({
             "url": url,
             "ok": True,
-            "product": result,
+            "cache": {"hit": cache_hit, "ttl_seconds": 300},
+            "product": payload,
         })
     successful = [item["product"] for item in products if item["ok"]]
     ranked = sorted(
