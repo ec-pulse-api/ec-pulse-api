@@ -2,7 +2,7 @@ import os
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -17,7 +17,7 @@ from app.services.product_parser import fetch_product
 app = FastAPI(
     title="EC Pulse API",
     description="EC product data API and price monitoring service",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -41,15 +41,27 @@ def require_api_key(api_key: str | None = Depends(api_key_header)) -> None:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
+async def _fetch_product_or_http_error(url: str):
+    try:
+        return await fetch_product(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to retrieve product page: {type(exc).__name__}",
+        ) from exc
+
+
 @app.get("/")
 def root():
     return {
         "name": "EC Pulse API",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "status": "ok",
         "docs": "/docs",
         "health": "/health",
-        "product_endpoint": "POST /v1/products",
+        "product_endpoint": "GET /v1/products?url=...",
         "monitor_endpoint": "POST /v1/monitors",
         "history_endpoint": "GET /v1/monitors/{monitor_id}/history",
     }
@@ -60,17 +72,14 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/v1/products", dependencies=[Depends(require_api_key)])
+async def product_get(url: HttpUrl = Query(...)):
+    return await _fetch_product_or_http_error(str(url))
+
+
 @app.post("/v1/products", dependencies=[Depends(require_api_key)])
-async def product(request: ProductRequest):
-    try:
-        return await fetch_product(str(request.url))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Unable to retrieve product page: {type(exc).__name__}",
-        ) from exc
+async def product_post(request: ProductRequest):
+    return await _fetch_product_or_http_error(str(request.url))
 
 
 @app.post("/v1/monitors", dependencies=[Depends(require_api_key)])
