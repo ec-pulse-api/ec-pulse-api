@@ -146,7 +146,9 @@ def get_account_usage(api_key: str) -> dict:
         account = conn.execute("SELECT plan, credits_balance, created_at, updated_at FROM api_accounts WHERE api_key_hash = %s", (key_hash,)).fetchone()
         if not account: raise RuntimeError("API key is not provisioned")
         rows = conn.execute("SELECT endpoint, SUM(credits), COUNT(*) FROM api_usage WHERE api_key_hash = %s GROUP BY endpoint ORDER BY SUM(credits) DESC", (key_hash,)).fetchall()
-    return {"plan": account[0], "credits_balance": account[1], "total_credits_used": sum(r[1] for r in rows), "created_at": account[2].isoformat(), "updated_at": account[3].isoformat(), "usage": [{"endpoint": r[0], "credits": r[1], "requests": r[2]} for r in rows]}
+        monthly = conn.execute("SELECT COALESCE(SUM(credits), 0), COUNT(*) FROM api_usage WHERE api_key_hash = %s AND created_at >= date_trunc('month', CURRENT_TIMESTAMP)", (key_hash,)).fetchone()
+        recent = conn.execute("SELECT COALESCE(SUM(credits), 0), COUNT(*) FROM api_usage WHERE api_key_hash = %s AND created_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'", (key_hash,)).fetchone()
+    return {"plan": account[0], "credits_balance": account[1], "total_credits_used": sum(r[1] for r in rows), "created_at": account[2].isoformat(), "updated_at": account[3].isoformat(), "usage": [{"endpoint": r[0], "credits": r[1], "requests": r[2]} for r in rows], "period_usage": {"month_to_date": {"credits": monthly[0], "requests": monthly[1]}, "last_24_hours": {"credits": recent[0], "requests": recent[1]}}}
 
 def create_monitor(api_key: str, url: str, interval_minutes: int, webhook_url: str) -> dict:
     now = datetime.now(timezone.utc); monitor_id = str(uuid.uuid4()); owner = _account_hash(api_key)
