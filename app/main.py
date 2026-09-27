@@ -6,13 +6,18 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
 
-from app.services.monitor_store import create_monitor, list_monitors, run_due_monitors
+from app.services.monitor_store import (
+    create_monitor,
+    get_price_history,
+    list_monitors,
+    run_due_monitors,
+)
 from app.services.product_parser import fetch_product
 
 app = FastAPI(
     title="EC Pulse API",
     description="EC product data API and price monitoring service",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -40,12 +45,13 @@ def require_api_key(api_key: str | None = Depends(api_key_header)) -> None:
 def root():
     return {
         "name": "EC Pulse API",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "status": "ok",
         "docs": "/docs",
         "health": "/health",
         "product_endpoint": "POST /v1/products",
         "monitor_endpoint": "POST /v1/monitors",
+        "history_endpoint": "GET /v1/monitors/{monitor_id}/history",
     }
 
 
@@ -61,7 +67,10 @@ async def product(request: ProductRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Unable to retrieve product page: {type(exc).__name__}") from exc
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to retrieve product page: {type(exc).__name__}",
+        ) from exc
 
 
 @app.post("/v1/monitors", dependencies=[Depends(require_api_key)])
@@ -80,6 +89,18 @@ def monitor(request: MonitorRequest):
 def monitors():
     try:
         return {"monitors": list_monitors()}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/v1/monitors/{monitor_id}/history", dependencies=[Depends(require_api_key)])
+def monitor_history(monitor_id: str, limit: int = 100):
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
+    try:
+        return get_price_history(monitor_id, limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Monitor not found") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
