@@ -12,12 +12,13 @@ from app.services.monitor_store import (
     ensure_api_account,
     get_account_usage,
     get_price_history,
+    get_price_opportunity,
     list_monitors,
     run_due_monitors,
 )
 from app.services.product_parser import fetch_product
 
-app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.5.0")
+app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.6.0")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 class ProductRequest(BaseModel):
@@ -55,11 +56,12 @@ def _charge(api_key: str, endpoint: str, credits: int = 1):
 @app.get("/")
 def root():
     return {
-        "name": "EC Pulse API", "version": "0.5.0", "status": "ok",
+        "name": "EC Pulse API", "version": "0.6.0", "status": "ok",
         "docs": "/docs", "health": "/health",
         "product_endpoint": "GET /v1/products?url=...",
         "monitor_endpoint": "POST /v1/monitors",
         "history_endpoint": "GET /v1/monitors/{monitor_id}/history",
+        "opportunity_endpoint": "GET /v1/monitors/{monitor_id}/opportunity",
         "account_endpoint": "GET /v1/account",
     }
 
@@ -67,17 +69,17 @@ def root():
 def health():
     return {"status": "ok"}
 
-@app.get("/v1/products", dependencies=[Depends(get_api_key)])
+@app.get("/v1/products")
 async def product_get(url: HttpUrl = Query(...), api_key: str = Depends(get_api_key)):
     _charge(api_key, "GET /v1/products")
     return await _fetch_product_or_http_error(str(url))
 
-@app.post("/v1/products", dependencies=[Depends(get_api_key)])
+@app.post("/v1/products")
 async def product_post(request: ProductRequest, api_key: str = Depends(get_api_key)):
     _charge(api_key, "POST /v1/products")
     return await _fetch_product_or_http_error(str(request.url))
 
-@app.post("/v1/monitors", dependencies=[Depends(get_api_key)])
+@app.post("/v1/monitors")
 def monitor(request: MonitorRequest, api_key: str = Depends(get_api_key)):
     _charge(api_key, "POST /v1/monitors")
     try:
@@ -85,20 +87,32 @@ def monitor(request: MonitorRequest, api_key: str = Depends(get_api_key)):
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-@app.get("/v1/monitors", dependencies=[Depends(get_api_key)])
+@app.get("/v1/monitors")
 def monitors(api_key: str = Depends(get_api_key)):
     try:
         return {"monitors": list_monitors()}
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-@app.get("/v1/monitors/{monitor_id}/history", dependencies=[Depends(get_api_key)])
+@app.get("/v1/monitors/{monitor_id}/history")
 def monitor_history(monitor_id: str, limit: int = 100, api_key: str = Depends(get_api_key)):
     if limit < 1 or limit > 1000:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
     _charge(api_key, "GET /v1/monitors/{monitor_id}/history")
     try:
         return get_price_history(monitor_id, limit)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Monitor not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+@app.get("/v1/monitors/{monitor_id}/opportunity")
+def monitor_opportunity(monitor_id: str, limit: int = 100, api_key: str = Depends(get_api_key)):
+    if limit < 2 or limit > 1000:
+        raise HTTPException(status_code=400, detail="limit must be between 2 and 1000")
+    _charge(api_key, "GET /v1/monitors/{monitor_id}/opportunity", 2)
+    try:
+        return get_price_opportunity(monitor_id, limit)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Monitor not found") from exc
     except RuntimeError as exc:
