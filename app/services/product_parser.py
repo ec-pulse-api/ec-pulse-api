@@ -7,9 +7,16 @@ from urllib.parse import urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-
 USER_AGENT = "EC-Pulse/0.1 (+https://ec-pulse-api.vercel.app)"
 
+MARKETPLACES = {
+    "amazon.co.jp": "amazon",
+    "www.amazon.co.jp": "amazon",
+    "rakuten.co.jp": "rakuten",
+    "item.rakuten.co.jp": "rakuten",
+    "shopping.yahoo.co.jp": "yahoo",
+    "lohaco.yahoo.co.jp": "yahoo",
+}
 
 def _meta(soup: BeautifulSoup, *names: str) -> str | None:
     for name in names:
@@ -19,7 +26,6 @@ def _meta(soup: BeautifulSoup, *names: str) -> str | None:
         if tag and tag.get("content"):
             return tag["content"].strip()
     return None
-
 
 def _jsonld(soup: BeautifulSoup) -> list[dict[str, Any]]:
     items = []
@@ -34,7 +40,6 @@ def _jsonld(soup: BeautifulSoup) -> list[dict[str, Any]]:
             items.append(data)
     return items
 
-
 def _find_product(items: list[dict[str, Any]]) -> dict[str, Any] | None:
     for item in items:
         if item.get("@type") == "Product":
@@ -46,13 +51,27 @@ def _find_product(items: list[dict[str, Any]]) -> dict[str, Any] | None:
                     return node
     return None
 
-
 def _number(value: Any) -> float | None:
     if value is None:
         return None
     match = re.search(r"-?\d+(?:[.,]\d+)?", str(value).replace(",", ""))
     return float(match.group()) if match else None
 
+def _marketplace(host: str) -> str:
+    host = host.lower().split(":")[0]
+    return MARKETPLACES.get(host, "web")
+
+def _product_id(marketplace: str, path: str) -> str | None:
+    if marketplace == "amazon":
+        match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?]|$)", path, re.I)
+        return match.group(1).upper() if match else None
+    if marketplace == "rakuten":
+        parts = [part for part in path.split("/") if part]
+        return parts[-1] if parts else None
+    if marketplace == "yahoo":
+        parts = [part for part in path.split("/") if part]
+        return parts[-1] if parts else None
+    return None
 
 async def fetch_product(url: str) -> dict[str, Any]:
     parsed = urlparse(url)
@@ -62,7 +81,10 @@ async def fetch_product(url: str) -> dict[str, Any]:
     async with httpx.AsyncClient(
         follow_redirects=True,
         timeout=15.0,
-        headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+        },
     ) as client:
         response = await client.get(url)
         response.raise_for_status()
@@ -70,6 +92,13 @@ async def fetch_product(url: str) -> dict[str, Any]:
     soup = BeautifulSoup(response.text, "html.parser")
     product = _find_product(_jsonld(soup)) or {}
     offers = product.get("offers") if isinstance(product.get("offers"), dict) else {}
+    marketplace = _marketplace(parsed.netloc)
+    product_id = (
+        product.get("sku")
+        or product.get("mpn")
+        or product.get("gtin13")
+        or _product_id(marketplace, parsed.path)
+    )
 
     title = product.get("name") or _meta(soup, "og:title") or (
         soup.title.get_text(strip=True) if soup.title else None
@@ -87,6 +116,7 @@ async def fetch_product(url: str) -> dict[str, Any]:
             "model": product.get("model"),
             "sku": product.get("sku"),
             "gtin": product.get("gtin13") or product.get("gtin"),
+            "product_id": product_id,
         },
         "pricing": {
             "price": _number(offers.get("price") or product.get("price")),
@@ -121,6 +151,8 @@ async def fetch_product(url: str) -> dict[str, Any]:
         },
         "source": {
             "site": parsed.netloc,
+            "marketplace": marketplace,
+            "product_id": product_id,
             "url": str(response.url),
             "image": image,
         },
