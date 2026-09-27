@@ -1,0 +1,71 @@
+import json
+import os
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+
+import psycopg
+
+from app.services.product_parser import fetch_product
+
+
+def _db_url() -> str:
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL is not configured")
+    return url
+
+
+def _init(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_cache (
+            cache_key TEXT PRIMARY KEY,
+            url TEXT NOT NULL,
+            payload JSONB NOT NULL,
+            captured_at TIMESTAMPTZ NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_product_cache_expires ON product_cache (expires_at)"
+    )
+    conn.commit()
+
+
+def _key(url: str) -> str:
+    return sha256(url.strip().encode()).hexdigest()
+
+
+async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, bool]:
+    now = datetime.now(timezone.utc)
+    cache_key = _key(url)
+
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        row = conn.execute(
+            "SELECT payload FROM product_cache WHERE cache_key = %s AND expires_at > %s",
+            (cache_key, now),
+        ).fetchone()
+        if row:
+            return row[0], True
+
+    payload = await fetch_product(url)
+    expires_at = now + timedelta(seconds=ttl_seconds)
+
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        conn.execute(
+            """
+            INSERT INTO product_cache (cache_key, url, payload, captured_at, expires_at)
+            VALUES (%s, %s, %s::jsonb, %s, %s)
+            ON CONFLICT (cache_key) DO UPDATE SET
+                url = EXCLUDED.url,
+                payload = EXCLUDED.payload,
+                captured_at = EXCLUDED.captured_at,
+                expires_at = EXCLUDED.expires_at
+            """,
+            (cache_key, url, json.dumps(payload), now, expires_at),
+        )
+        conn.commit()
+    return payload, False
