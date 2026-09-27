@@ -77,6 +77,19 @@ def root():
 @app.get("/health")
 def health(): return {"status":"ok"}
 
+@app.get("/v1/pricing")
+def pricing():
+    return {
+        "currency": "USD",
+        "plans": {
+            "free": {"credits": 100, "rate_limit_per_minute": 30},
+            "pro": {"credits": "configurable", "rate_limit_per_minute": 300},
+            "business": {"credits": "configurable", "rate_limit_per_minute": 3000},
+        },
+        "billing": "credit_based",
+        "note": "Paid pricing and automatic subscription provisioning will be connected next.",
+    }
+
 @app.get("/v1/products")
 async def product_get(response: Response,url:HttpUrl=Query(...),api_key:str=Depends(get_api_key)):
     charge=_charge(api_key,"GET /v1/products")
