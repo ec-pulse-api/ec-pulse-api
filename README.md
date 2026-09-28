@@ -37,6 +37,8 @@ The plan values are currently enforced in the API layer; commercial billing and 
 - `GET /v1/monitors/{id}/history`
 - `GET /v1/monitors/{id}/opportunity`
 - `GET /v1/account`
+- `POST /v1/research/ingest`
+- `GET /v1/research/runs/{run_id}/opportunity`
 
 ## Authentication
 
@@ -70,6 +72,9 @@ EC Pulse API
   |-- product normalization
   |-- marketplace search
   |-- monitor ownership
+  |-- research persistence
+  |-- pain/trend detection
+  |-- opportunity engine
   |-- price history
   |-- webhook events
   v
