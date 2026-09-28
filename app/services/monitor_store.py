@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 import httpx
 import psycopg
 
+from app.services.url_safety import validate_public_url
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS monitors (
     id TEXT PRIMARY KEY,
@@ -329,8 +331,8 @@ def list_research_runs(api_key: str, url: str | None = None, limit: int = 20) ->
         else:
             runs = conn.execute(
                 """WITH ranked AS (
-                    SELECT rr.*, LAG(rr.id) OVER (PARTITION BY rr.url ORDER BY rr.created_at DESC) AS previous_run_id,
-                           LAG(rr.created_at) OVER (PARTITION BY rr.url ORDER BY rr.created_at DESC) AS previous_captured_at
+                    SELECT rr.*, LAG(rr.id) OVER (PARTITION BY rr.url ORDER BY rr.created_at ASC) AS previous_run_id,
+                           LAG(rr.created_at) OVER (PARTITION BY rr.url ORDER BY rr.created_at ASC) AS previous_captured_at
                     FROM research_runs rr
                     WHERE rr.owner_key_hash = %s
                 )
@@ -461,6 +463,7 @@ async def run_due_monitors() -> dict:
     async with httpx.AsyncClient(timeout=10) as client:
         for monitor_id, url, interval, webhook_url, old_price in rows:
             try:
+                await validate_public_url(webhook_url)
                 data = await fetch_product(url); pricing = data.get("pricing", {}); new_price = pricing.get("price"); currency = pricing.get("currency"); source = data.get("source", {}); source_url = source.get("url") or url
                 if old_price is not None and new_price is not None and new_price != old_price:
                     event = {"event": "price_changed", "monitor_id": monitor_id, "old_price": old_price, "new_price": new_price, "change_amount": round(new_price-old_price,2), "change_percent": round(((new_price-old_price)/old_price)*100,2) if old_price else None, "direction": "down" if new_price < old_price else "up", "currency": currency, "url": url, "source": {"site": source.get("site"), "url": source_url}, "captured_at": data["captured_at"]}
