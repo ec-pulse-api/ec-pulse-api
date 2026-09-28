@@ -54,8 +54,9 @@ def detect_market(host: str, language_hint: str | None = None) -> str:
     host = host.lower()
     if ".co.jp" in host or "rakuten.co.jp" in host or language_hint == "ja":
         return "JP"
-    if ".com" in host or "reddit.com" in host or "youtube.com" in host or "tiktok.com" in host:
+    if host == "amazon.com" or host.endswith(".amazon.com"):
         return "US"
+    # Global social/community domains do not imply a US market by themselves.
     return "GLOBAL"
 
 def detect_locale(market: str) -> str:
