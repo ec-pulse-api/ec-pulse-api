@@ -55,6 +55,41 @@ CREATE TABLE IF NOT EXISTS api_usage (
     created_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_api_usage_key_created ON api_usage (api_key_hash, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS research_runs (
+    id TEXT PRIMARY KEY,
+    owner_key_hash TEXT NOT NULL,
+    url TEXT NOT NULL,
+    source_type TEXT,
+    market TEXT,
+    locale TEXT,
+    title TEXT,
+    comments_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_research_runs_owner_created ON research_runs (owner_key_hash, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_research_runs_url_created ON research_runs (url, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS research_comments (
+    id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    body_hash TEXT NOT NULL,
+    locale TEXT,
+    captured_at TIMESTAMPTZ NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_research_comments_run_hash ON research_comments (run_id, body_hash);
+CREATE INDEX IF NOT EXISTS idx_research_comments_hash ON research_comments (body_hash);
+
+CREATE TABLE IF NOT EXISTS research_pain_points (
+    id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES research_runs(id) ON DELETE CASCADE,
+    pain TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    share_percent DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_research_pains_run_count ON research_pain_points (run_id, count DESC);
 """
 
 def _db_url() -> str:
@@ -186,6 +221,93 @@ def get_price_opportunity(api_key: str, monitor_id: str, limit: int = 100) -> di
     discount_vs_high = round(((highest-current)/highest)*100, 2) if highest and current is not None else None; discount_vs_average = round(((baseline-current)/baseline)*100, 2) if baseline and current is not None else None
     signal = "historical_low" if current is not None and lowest is not None and current <= lowest else "below_average" if discount_vs_average and discount_vs_average > 10 else "normal"
     return {"monitor_id": monitor_id, "url": monitor[1], "current_price": current, "currency": rows[0][1] if rows else None, "metrics": {"historical_low": lowest, "historical_high": highest, "average_price": round(baseline, 2) if baseline is not None else None, "discount_vs_high_percent": discount_vs_high, "discount_vs_average_percent": discount_vs_average}, "signal": signal, "captured_at": monitor[3].isoformat() if monitor[3] else None}
+
+def _normalize_research_text(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def save_research_run(api_key: str, item: dict, analysis: dict) -> dict:
+    run_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    comments = [x.strip() for x in item.get("comments", []) if isinstance(x, str) and x.strip()]
+    owner = _account_hash(api_key)
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        conn.execute(
+            """INSERT INTO research_runs
+            (id, owner_key_hash, url, source_type, market, locale, title, comments_count, created_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (run_id, owner, item.get("url"), item.get("source_type"), item.get("market"),
+             item.get("locale"), item.get("title"), len(comments), now),
+        )
+        for body in comments:
+            body_hash = hashlib.sha256(_normalize_research_text(body).encode()).hexdigest()
+            conn.execute(
+                """INSERT INTO research_comments (run_id, body, body_hash, locale, captured_at)
+                VALUES (%s,%s,%s,%s,%s) ON CONFLICT (run_id, body_hash) DO NOTHING""",
+                (run_id, body, body_hash, item.get("locale"), now),
+            )
+        for pain in analysis.get("pain_points", []):
+            conn.execute(
+                """INSERT INTO research_pain_points
+                (run_id, pain, count, share_percent, created_at)
+                VALUES (%s,%s,%s,%s,%s)""",
+                (run_id, pain.get("pain", "unknown"), int(pain.get("count", 0)),
+                 float(pain.get("share_percent", 0)), now),
+            )
+        conn.commit()
+
+        previous = conn.execute(
+            """SELECT rr.id, rr.created_at, rr.comments_count, rp.pain, rp.count, rp.share_percent
+            FROM research_runs rr
+            LEFT JOIN research_pain_points rp ON rp.run_id = rr.id
+            WHERE rr.url = %s AND rr.owner_key_hash = %s AND rr.id <> %s
+            ORDER BY rr.created_at DESC
+            LIMIT 50""",
+            (item.get("url"), owner, run_id),
+        ).fetchall()
+
+    previous_by_pain = {}
+    previous_run_id = None
+    previous_created_at = None
+    previous_comments = None
+    for row in previous:
+        if previous_run_id is None:
+            previous_run_id, previous_created_at, previous_comments = row[0], row[1], row[2]
+        if row[3] is not None and row[3] not in previous_by_pain:
+            previous_by_pain[row[3]] = {"count": row[4], "share_percent": row[5]}
+
+    trends = []
+    for pain in analysis.get("pain_points", []):
+        label = pain.get("pain")
+        prior = previous_by_pain.get(label)
+        current_count = int(pain.get("count", 0))
+        current_share = float(pain.get("share_percent", 0))
+        count_delta = current_count - prior["count"] if prior else current_count
+        share_delta = round(current_share - prior["share_percent"], 1) if prior else round(current_share, 1)
+        trends.append({
+            "pain": label,
+            "current_count": current_count,
+            "previous_count": prior["count"] if prior else 0,
+            "count_delta": count_delta,
+            "current_share_percent": current_share,
+            "previous_share_percent": prior["share_percent"] if prior else 0,
+            "share_delta_percent": share_delta,
+            "status": "new" if not prior else ("rising" if count_delta > 0 or share_delta > 0 else "stable"),
+        })
+
+    rising = [x for x in trends if x["status"] in {"new", "rising"}]
+    rising.sort(key=lambda x: (x["count_delta"], x["share_delta_percent"]), reverse=True)
+    return {
+        "run_id": run_id,
+        "previous_run_id": previous_run_id,
+        "previous_captured_at": previous_created_at.isoformat() if previous_created_at else None,
+        "trend": trends,
+        "emerging_pains": rising[:10],
+        "signal": "emerging_pain_detected" if rising else "no_rising_pain",
+        "comparison_note": "Operational change signal versus the immediately previous run for the same URL; not a statistical significance test.",
+    }
+
 
 async def run_due_monitors() -> dict:
     from app.services.product_parser import fetch_product
