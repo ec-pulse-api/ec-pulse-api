@@ -110,6 +110,24 @@ def process_webhook(payload: bytes, signature: str) -> dict:
     return {"ok": True, "duplicate": False, "event_id": event_id, "type": event_type, "handled": handled}
 
 
+def create_customer_portal(api_key: str) -> str:
+    base_url = os.getenv("APP_BASE_URL")
+    if not base_url:
+        raise RuntimeError("APP_BASE_URL is not configured")
+    from app.services.monitor_store import _account_hash
+    with psycopg.connect(_db_url()) as conn:
+        _init_billing(conn)
+        row = conn.execute("SELECT stripe_customer_id FROM api_accounts WHERE api_key_hash=%s", (_account_hash(api_key),)).fetchone()
+    customer_id = row[0] if row else None
+    if not customer_id:
+        raise ValueError("No Stripe customer is linked to this account")
+    session = _stripe().billing_portal.Session.create(
+        customer=customer_id,
+        return_url=f"{base_url}/billing"
+    )
+    return session.url
+
+
 def create_checkout(api_key: str, plan: str) -> str:
     if plan not in PLANS:
         raise ValueError("plan must be pro or business")
