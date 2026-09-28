@@ -1,6 +1,8 @@
 import re
 from urllib.parse import urlparse
 
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, validate_public_url
+
 import httpx
 from bs4 import BeautifulSoup
 
@@ -69,7 +71,8 @@ def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
-    parsed = urlparse(url)
+    current_url = await validate_public_url(url)
+    parsed = urlparse(current_url)
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("Only http/https URLs are supported")
 
@@ -81,9 +84,19 @@ async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
         "Accept-Language": "ja,en;q=0.8",
     }
 
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
-        response = await client.get(url)
-        response.raise_for_status()
+    async with httpx.AsyncClient(timeout=15, follow_redirects=False, headers=headers) as client:
+        for _ in range(MAX_REDIRECTS + 1):
+            response = await client.get(current_url)
+            if response.is_redirect or response.is_permanent_redirect:
+                location = response.headers.get("location")
+                if not location:
+                    raise ValueError("Redirect response did not include a location")
+                current_url = await validate_public_url(next_redirect(current_url, location))
+                continue
+            response.raise_for_status()
+            break
+        else:
+            raise ValueError("Too many redirects")
 
     soup = BeautifulSoup(response.text, "html.parser")
     candidates = []
@@ -106,7 +119,7 @@ async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
 
     title = soup.title.get_text(" ", strip=True) if soup.title else None
     return {
-        "url": url,
+        "url": current_url,
         "source": parsed.netloc,
         "source_type": source,
         "market": market,
