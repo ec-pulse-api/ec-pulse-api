@@ -40,16 +40,34 @@ def _jsonld(soup: BeautifulSoup) -> list[dict[str, Any]]:
             items.append(data)
     return items
 
+def _is_type(item: dict[str, Any], type_name: str) -> bool:
+    value = item.get("@type")
+    if isinstance(value, list):
+        return type_name in value
+    return value == type_name
+
+
 def _find_product(items: list[dict[str, Any]]) -> dict[str, Any] | None:
     for item in items:
-        if item.get("@type") == "Product":
+        if _is_type(item, "Product"):
             return item
         graph = item.get("@graph")
         if isinstance(graph, list):
             for node in graph:
-                if isinstance(node, dict) and node.get("@type") == "Product":
+                if isinstance(node, dict) and _is_type(node, "Product"):
                     return node
     return None
+
+
+def _offers_dict(offers: Any) -> dict[str, Any]:
+    if isinstance(offers, dict):
+        return offers
+    if isinstance(offers, list):
+        for offer in offers:
+            if isinstance(offer, dict) and offer.get("price") is not None:
+                return offer
+        return next((offer for offer in offers if isinstance(offer, dict)), {})
+    return {}
 
 def _number(value: Any) -> float | None:
     if value is None:
@@ -91,7 +109,7 @@ async def fetch_product(url: str) -> dict[str, Any]:
 
     soup = BeautifulSoup(response.text, "html.parser")
     product = _find_product(_jsonld(soup)) or {}
-    offers = product.get("offers") if isinstance(product.get("offers"), dict) else {}
+    offers = _offers_dict(product.get("offers"))
     marketplace = _marketplace(parsed.netloc)
     product_id = (
         product.get("sku")
@@ -104,6 +122,8 @@ async def fetch_product(url: str) -> dict[str, Any]:
         soup.title.get_text(strip=True) if soup.title else None
     )
     image = product.get("image") or _meta(soup, "og:image")
+    if isinstance(image, list):
+        image = next((item for item in image if isinstance(item, str)), None)
 
     return {
         "product": {
