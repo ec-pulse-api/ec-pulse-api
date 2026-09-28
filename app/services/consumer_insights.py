@@ -54,6 +54,8 @@ def analyze_comments(comments: list[str], source: str | None = None) -> dict:
         "pain_points": pains,
         "top_terms": terms,
         "recommended_angle": angle,
+        "ad_copy_candidates": [f"「{angle}」で困っていませんか？", f"その「{angle}」を、もっとラクに。"] if angle else [],
+        "next_action": "validate the top pain against raw comments, then test the matching product/creative angle",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "method": "rule-based Japanese pain-point extraction; validate against raw customer language before advertising"
     }
