@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import os
 import httpx
+import psycopg
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -98,7 +99,18 @@ def root():
     return {"name":"EC Pulse API","version":"0.12.0","status":"ok","docs":"/docs","health":"/health","pricing_model":"credit-based API with per-plan rate limits"}
 
 @app.get("/health")
-def health(): return {"status":"ok"}
+def health():
+    # Verify the database dependency so a broken deployment is not reported as healthy.
+    try:
+        from app.services.monitor_store import _db_url
+        with psycopg.connect(_db_url(), connect_timeout=3) as conn:
+            conn.execute("SELECT 1")
+        return {"status": "ok", "database": "ok"}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "degraded", "database": "unavailable", "error": type(exc).__name__},
+        ) from exc
 
 @app.post("/v1/billing/checkout")
 def billing_checkout(plan: str = Query(..., pattern="^(pro|business)$"), api_key: str = Depends(get_api_key)):
