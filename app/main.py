@@ -95,7 +95,7 @@ async def _fetch_product_or_http_error(url: str):
 
 @app.get("/")
 def root():
-    return {"name":"EC Pulse API","version":"0.11.0","status":"ok","docs":"/docs","health":"/health","pricing_model":"credit-based API with per-plan rate limits"}
+    return {"name":"EC Pulse API","version":"0.12.0","status":"ok","docs":"/docs","health":"/health","pricing_model":"credit-based API with per-plan rate limits"}
 
 @app.get("/health")
 def health(): return {"status":"ok"}
