@@ -65,6 +65,16 @@ def analyze_comments(comments: list[str], source: str | None = None, locale: str
     ]
     terms = _extract_terms(cleaned)
     angle = pains[0]["pain"] if pains else (terms[0]["term"] if terms else None)
+    opportunity = None
+    if pains:
+        top = pains[0]
+        opportunity = {
+            "problem": top["pain"],
+            "evidence_count": top["count"],
+            "evidence_share_percent": top["share_percent"],
+            "product_direction": f"Reduce or eliminate {top['pain']}" if locale == "en-US" else f"「{top['pain']}」を減らす・解消する商品設計",
+            "validation": "Check whether the complaint is repeated across independent sources before sourcing or branding.",
+        }
     return {
         "source": source,
         "locale": locale,
@@ -72,6 +82,7 @@ def analyze_comments(comments: list[str], source: str | None = None, locale: str
         "pain_points": pains,
         "top_terms": terms,
         "recommended_angle": angle,
+        "market_opportunity": opportunity,
         "ad_copy_candidates": [
             f"「{angle}」で困っていませんか？" if locale != "en-US" else f"Still struggling with {angle}?",
             f"その「{angle}」を、もっとラクに。" if locale != "en-US" else f"A simpler way to solve {angle}.",
