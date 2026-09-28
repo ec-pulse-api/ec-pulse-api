@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, validate_public_url
+
 import httpx
 from bs4 import BeautifulSoup
 
@@ -92,25 +94,34 @@ def _product_id(marketplace: str, path: str) -> str | None:
     return None
 
 async def fetch_product(url: str) -> dict[str, Any]:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("A valid http(s) URL is required")
-
+    current_url = await validate_public_url(url)
     async with httpx.AsyncClient(
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=15.0,
         headers={
             "User-Agent": USER_AGENT,
             "Accept": "text/html,application/xhtml+xml",
         },
     ) as client:
-        response = await client.get(url)
-        response.raise_for_status()
+        for _ in range(MAX_REDIRECTS + 1):
+            response = await client.get(current_url)
+            if response.is_redirect or response.is_permanent_redirect:
+                location = response.headers.get("location")
+                if not location:
+                    raise ValueError("Redirect response did not include a location")
+                current_url = await validate_public_url(next_redirect(current_url, location))
+                continue
+            response.raise_for_status()
+            break
+        else:
+            raise ValueError("Too many redirects")
 
     soup = BeautifulSoup(response.text, "html.parser")
     product = _find_product(_jsonld(soup)) or {}
     offers = _offers_dict(product.get("offers"))
-    marketplace = _marketplace(parsed.netloc)
+    final_url = str(response.url)
+    final_parsed = urlparse(final_url)
+    marketplace = _marketplace(final_parsed.netloc)
     product_id = (
         product.get("sku")
         or product.get("mpn")
@@ -170,10 +181,10 @@ async def fetch_product(url: str) -> dict[str, Any]:
             ),
         },
         "source": {
-            "site": parsed.netloc,
+            "site": final_parsed.netloc,
             "marketplace": marketplace,
             "product_id": product_id,
-            "url": str(response.url),
+            "url": final_url,
             "image": image,
         },
         "captured_at": datetime.now(timezone.utc).isoformat(),
