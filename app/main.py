@@ -9,7 +9,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
 
 from app.services.billing import create_checkout, process_webhook
-from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run
+from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
@@ -171,6 +171,33 @@ async def research_ingest(request: ResearchUrlRequest, api_key: str = Depends(ge
         del bucket["pain_points"]
 
     return {"count": len(results), "credits": charge, "market_summary": market_summary, "results": results}
+
+@app.get("/v1/research/runs/{run_id}/opportunity")
+async def research_opportunity(run_id: str, request_http: Request, response: Response, api_key: str = Depends(get_api_key)):
+    charge = _charge(api_key, "GET /v1/research/runs/{run_id}/opportunity", 1)
+    for k, v in _usage_headers(request_http, api_key, charge).items():
+        response.headers[k] = v
+    try:
+        result = get_research_opportunity(api_key, run_id)
+        queries = []
+        for item in result.get("product_directions", [])[:3]:
+            if item["pain"] not in queries:
+                queries.append(item["pain"])
+        candidates = []
+        for query in queries:
+            try:
+                found = await search_products(query, ["amazon", "rakuten", "yahoo"], 5)
+                if isinstance(found, dict):
+                    candidates.extend(found.get("results", found.get("items", [])))
+            except Exception:
+                continue
+        result["product_candidates"] = candidates[:15]
+        result["credits"] = charge
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Research run not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 @app.get("/v1/products")
 async def product_get(request:Request,response:Response,url:HttpUrl=Query(...),api_key:str=Depends(get_api_key)):
