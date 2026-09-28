@@ -9,7 +9,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
 
 from app.services.billing import create_checkout, create_customer_portal, process_webhook
-from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity
+from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity, list_research_runs
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
@@ -180,6 +180,19 @@ async def research_ingest(request: ResearchUrlRequest, api_key: str = Depends(ge
         del bucket["pain_points"]
 
     return {"count": len(results), "credits": charge, "market_summary": market_summary, "results": results}
+
+@app.get("/v1/research/runs")
+def research_runs(
+    request_http: Request,
+    url: str | None = Query(default=None, max_length=2000),
+    limit: int = Query(default=20, ge=1, le=100),
+    api_key: str = Depends(get_api_key),
+):
+    try:
+        return {"runs": list_research_runs(api_key, url, limit)}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
 
 @app.get("/v1/research/runs/{run_id}/opportunity")
 async def research_opportunity(run_id: str, request_http: Request, response: Response, api_key: str = Depends(get_api_key)):
