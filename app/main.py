@@ -7,12 +7,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
 
+from app.services.billing import create_checkout, process_webhook
 from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
 from app.services.rate_limit import check_rate_limit
 
-app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.9.3")
+app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.10.0")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 class ProductRequest(BaseModel):
@@ -84,10 +85,30 @@ async def _fetch_product_or_http_error(url: str):
 
 @app.get("/")
 def root():
-    return {"name":"EC Pulse API","version":"0.9.3","status":"ok","docs":"/docs","health":"/health","pricing_model":"credit-based API with per-plan rate limits"}
+    return {"name":"EC Pulse API","version":"0.10.0","status":"ok","docs":"/docs","health":"/health","pricing_model":"credit-based API with per-plan rate limits"}
 
 @app.get("/health")
 def health(): return {"status":"ok"}
+
+@app.post("/v1/billing/checkout")
+def billing_checkout(plan: str = Query(..., pattern="^(pro|business)$"), api_key: str = Depends(get_api_key)):
+    try:
+        return {"url": create_checkout(api_key, plan), "plan": plan}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request, stripe_signature: str | None = Header(default=None, alias="Stripe-Signature")):
+    if not stripe_signature:
+        raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
+    try:
+        return process_webhook(await request.body(), stripe_signature)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 @app.get("/v1/pricing")
 def pricing():
