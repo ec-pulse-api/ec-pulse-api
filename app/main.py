@@ -14,7 +14,7 @@ from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
 from app.services.rate_limit import check_rate_limit
 
-app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.10.0")
+app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.11.0")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 class ProductRequest(BaseModel):
@@ -90,7 +90,7 @@ async def _fetch_product_or_http_error(url: str):
 
 @app.get("/")
 def root():
-    return {"name":"EC Pulse API","version":"0.10.0","status":"ok","docs":"/docs","health":"/health","pricing_model":"credit-based API with per-plan rate limits"}
+    return {"name":"EC Pulse API","version":"0.11.0","status":"ok","docs":"/docs","health":"/health","pricing_model":"credit-based API with per-plan rate limits"}
 
 @app.get("/health")
 def health(): return {"status":"ok"}
