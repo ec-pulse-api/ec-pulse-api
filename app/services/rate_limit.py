@@ -15,6 +15,9 @@ def check_rate_limit(api_key_hash: str, plan: str) -> dict:
         bucket = _BUCKETS[api_key_hash]
         cutoff = now - window
         _BUCKETS[api_key_hash] = bucket = [t for t in bucket if t > cutoff]
+        if not bucket:
+            _BUCKETS.pop(api_key_hash, None)
+            bucket = _BUCKETS[api_key_hash]
         if len(bucket) >= limit:
             retry_after = max(1, int(window - (now - bucket[0])))
             return {"allowed": False, "limit": limit, "remaining": 0, "reset_seconds": retry_after}
