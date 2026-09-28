@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
 
-from app.services.billing import create_checkout, process_webhook
+from app.services.billing import create_checkout, create_customer_portal, process_webhook
 from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
@@ -104,6 +104,15 @@ def health(): return {"status":"ok"}
 def billing_checkout(plan: str = Query(..., pattern="^(pro|business)$"), api_key: str = Depends(get_api_key)):
     try:
         return {"url": create_checkout(api_key, plan), "plan": plan}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+@app.post("/v1/billing/portal")
+def billing_portal(api_key: str = Depends(get_api_key)):
+    try:
+        return {"url": create_customer_portal(api_key)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
