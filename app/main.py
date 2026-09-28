@@ -25,7 +25,11 @@ class ProductSearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=200)
     marketplaces: list[str] = Field(default=["amazon", "rakuten", "yahoo"], min_length=1, max_length=3)
     limit: int = Field(default=5, ge=1, le=10)
-class ConsumerInsightRequest(BaseModel):\n    comments: list[str] = Field(min_length=1, max_length=5000)\n    source: str | None = Field(default=None, max_length=50)\n\nclass MonitorRequest(BaseModel):
+class ConsumerInsightRequest(BaseModel):
+    comments: list[str] = Field(min_length=1, max_length=5000)
+    source: str | None = Field(default=None, max_length=50)
+
+class MonitorRequest(BaseModel):
     url: HttpUrl
     interval_minutes: int = Field(default=60, ge=5, le=10080)
     webhook_url: HttpUrl
@@ -115,7 +119,14 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
 def pricing():
     return {"currency":"USD","plans":{"free":{"credits":100,"rate_limit_per_minute":30},"pro":{"credits":"configurable","rate_limit_per_minute":300},"business":{"credits":"configurable","rate_limit_per_minute":3000}},"billing":"credit_based","note":"Paid pricing and automatic subscription provisioning will be connected next."}
 
-@app.post("/v1/consumer-insights/analyze")\ndef consumer_insights(request: ConsumerInsightRequest, api_key: str = Depends(get_api_key)):\n    _charge(api_key, "POST /v1/consumer-insights/analyze", max(1, len(request.comments) // 50))\n    return analyze_comments(request.comments, request.source)\n\n@app.get("/v1/products")
+@app.post("/v1/consumer-insights/analyze")
+def consumer_insights(request: ConsumerInsightRequest, api_key: str = Depends(get_api_key)):
+    charge = _charge(api_key, "POST /v1/consumer-insights/analyze", max(1, len(request.comments) // 50))
+    result = analyze_comments(request.comments, request.source)
+    result["credits"] = charge
+    return result
+
+@app.get("/v1/products")
 async def product_get(request:Request,response:Response,url:HttpUrl=Query(...),api_key:str=Depends(get_api_key)):
     charge=_charge(api_key,"GET /v1/products")
     for k,v in _usage_headers(request,api_key,charge).items(): response.headers[k]=v
