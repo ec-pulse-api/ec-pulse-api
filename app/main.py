@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import httpx
 from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -12,6 +13,7 @@ from app.services.monitor_store import consume_credit, create_monitor, ensure_ap
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
+from app.services.research_ingest import fetch_public_comments
 from app.services.rate_limit import check_rate_limit
 
 app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.11.0")
@@ -28,6 +30,9 @@ class ProductSearchRequest(BaseModel):
 class ConsumerInsightRequest(BaseModel):
     comments: list[str] = Field(min_length=1, max_length=5000)
     source: str | None = Field(default=None, max_length=50)
+class ResearchUrlRequest(BaseModel):
+    urls: list[HttpUrl] = Field(min_length=1, max_length=20)
+    max_comments_per_url: int = Field(default=500, ge=1, le=500)
 
 class MonitorRequest(BaseModel):
     url: HttpUrl
@@ -125,6 +130,24 @@ def consumer_insights(request: ConsumerInsightRequest, api_key: str = Depends(ge
     result = analyze_comments(request.comments, request.source)
     result["credits"] = charge
     return result
+
+@app.post("/v1/research/ingest")
+async def research_ingest(request: ResearchUrlRequest, api_key: str = Depends(get_api_key)):
+    charge = _charge(api_key, "POST /v1/research/ingest", len(request.urls))
+    results = []
+    for url in request.urls:
+        try:
+            item = await fetch_public_comments(str(url), request.max_comments_per_url)
+            if item["comments"]:
+                item["analysis"] = analyze_comments(item["comments"], item["source"])
+            else:
+                item["analysis"] = {"comments_analyzed": 0, "pain_points": [], "top_terms": [], "recommended_angle": None}
+            results.append(item)
+        except httpx.HTTPStatusError as exc:
+            results.append({"url": str(url), "ok": False, "error": f"http_{exc.response.status_code}"})
+        except Exception as exc:
+            results.append({"url": str(url), "ok": False, "error": type(exc).__name__})
+    return {"count": len(results), "credits": charge, "results": results}
 
 @app.get("/v1/products")
 async def product_get(request:Request,response:Response,url:HttpUrl=Query(...),api_key:str=Depends(get_api_key)):
