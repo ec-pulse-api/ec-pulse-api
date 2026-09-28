@@ -309,6 +309,91 @@ def save_research_run(api_key: str, item: dict, analysis: dict) -> dict:
     }
 
 
+def list_research_runs(api_key: str, url: str | None = None, limit: int = 20) -> list[dict]:
+    owner = _account_hash(api_key)
+    limit = max(1, min(limit, 100))
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        if url:
+            runs = conn.execute(
+                """WITH ranked AS (
+                    SELECT rr.*, LAG(rr.id) OVER (PARTITION BY rr.url ORDER BY rr.created_at DESC) AS previous_run_id,
+                           LAG(rr.created_at) OVER (PARTITION BY rr.url ORDER BY rr.created_at DESC) AS previous_captured_at
+                    FROM research_runs rr
+                    WHERE rr.owner_key_hash = %s AND rr.url = %s
+                )
+                SELECT id, url, source_type, market, locale, title, comments_count, created_at, previous_run_id, previous_captured_at
+                FROM ranked ORDER BY created_at DESC LIMIT %s""",
+                (owner, url, limit),
+            ).fetchall()
+        else:
+            runs = conn.execute(
+                """WITH ranked AS (
+                    SELECT rr.*, LAG(rr.id) OVER (PARTITION BY rr.url ORDER BY rr.created_at DESC) AS previous_run_id,
+                           LAG(rr.created_at) OVER (PARTITION BY rr.url ORDER BY rr.created_at DESC) AS previous_captured_at
+                    FROM research_runs rr
+                    WHERE rr.owner_key_hash = %s
+                )
+                SELECT id, url, source_type, market, locale, title, comments_count, created_at, previous_run_id, previous_captured_at
+                FROM ranked ORDER BY created_at DESC LIMIT %s""",
+                (owner, limit),
+            ).fetchall()
+
+        run_ids = [r[0] for r in runs]
+        previous_ids = [r[8] for r in runs if r[8]]
+        all_ids = list(dict.fromkeys(run_ids + previous_ids))
+        pains_by_run: dict[str, list[dict]] = {run_id: [] for run_id in all_ids}
+        if all_ids:
+            placeholders = ",".join(["%s"] * len(all_ids))
+            pain_rows = conn.execute(
+                f"SELECT run_id, pain, count, share_percent FROM research_pain_points WHERE run_id IN ({placeholders}) ORDER BY count DESC",
+                all_ids,
+            ).fetchall()
+            for row in pain_rows:
+                pains_by_run[row[0]].append({"pain": row[1], "count": row[2], "share_percent": row[3]})
+
+    output = []
+    for row in runs:
+        current_pains = pains_by_run.get(row[0], [])
+        previous_pains = {p["pain"]: p for p in pains_by_run.get(row[8], [])} if row[8] else {}
+        trends = []
+        for pain in current_pains:
+            prior = previous_pains.get(pain["pain"])
+            count_delta = pain["count"] - prior["count"] if prior else pain["count"]
+            share_delta = round(pain["share_percent"] - prior["share_percent"], 1) if prior else round(pain["share_percent"], 1)
+            status = "new" if not prior else ("rising" if count_delta > 0 or share_delta > 0 else "stable")
+            trends.append({
+                "pain": pain["pain"],
+                "count_delta": count_delta,
+                "share_delta_percent": share_delta,
+                "status": status,
+                "current_count": pain["count"],
+                "previous_count": prior["count"] if prior else 0,
+                "current_share_percent": pain["share_percent"],
+                "previous_share_percent": prior["share_percent"] if prior else 0,
+            })
+        emerging = [x for x in trends if x["status"] in {"new", "rising"}]
+        emerging.sort(key=lambda x: (x["share_delta_percent"], x["count_delta"]), reverse=True)
+        output.append({
+            "run_id": row[0],
+            "url": row[1],
+            "source_type": row[2],
+            "market": row[3],
+            "locale": row[4],
+            "title": row[5],
+            "comments_count": row[6],
+            "captured_at": row[7].isoformat(),
+            "top_pain": current_pains[0] if current_pains else None,
+            "trend": {
+                "previous_run_id": row[8],
+                "previous_captured_at": row[9].isoformat() if row[9] else None,
+                "emerging_pains": emerging[:5],
+                "signal": "emerging_pain_detected" if emerging else ("no_previous_run" if not row[8] else "no_rising_pain"),
+            },
+        })
+    return output
+
+
 def get_research_opportunity(api_key: str, run_id: str) -> dict:
     owner = _account_hash(api_key)
     with psycopg.connect(_db_url()) as conn:
