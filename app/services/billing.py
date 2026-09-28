@@ -67,16 +67,13 @@ def _apply_subscription(conn, subscription):
     row = _account_by_customer(conn, customer_id) if customer_id else None
     if not row:
         return False
+    values = (subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), datetime.now(timezone.utc), row[0])
     if plan:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
-            current_period_start=%s, current_period_end=%s, updated_at=%s WHERE api_key_hash=%s""",
-            (plan, subscription_id, status, _ts(subscription.get("current_period_start")),
-             _ts(subscription.get("current_period_end")), datetime.now(timezone.utc), row[0]))
+            current_period_start=%s, current_period_end=%s, updated_at=%s WHERE api_key_hash=%s""", (plan, *values))
     else:
         conn.execute("""UPDATE api_accounts SET stripe_subscription_id=%s, subscription_status=%s,
-            current_period_start=%s, current_period_end=%s, updated_at=%s WHERE api_key_hash=%s""",
-            (subscription_id, status, _ts(subscription.get("current_period_start")),
-             _ts(subscription.get("current_period_end")), datetime.now(timezone.utc), row[0]))
+            current_period_start=%s, current_period_end=%s, updated_at=%s WHERE api_key_hash=%s""", values)
     return True
 
 
@@ -86,17 +83,18 @@ def process_webhook(payload: bytes, signature: str) -> dict:
         raise RuntimeError("STRIPE_WEBHOOK_SECRET is not configured")
     sdk = _stripe()
     event = sdk.Webhook.construct_event(payload, signature, secret)
-    event_id = event["id"]
-    event_type = event["type"]
+    event_data = event.to_dict_recursive()
+    event_id = event_data["id"]
+    event_type = event_data["type"]
     now = datetime.now(timezone.utc)
     with psycopg.connect(_db_url()) as conn:
         _init_billing(conn)
         inserted = conn.execute("""INSERT INTO billing_events (event_id,event_type,created_at,processed_at,payload)
             VALUES (%s,%s,%s,%s,%s) ON CONFLICT (event_id) DO NOTHING RETURNING event_id""",
-            (event_id, event_type, _ts(event.get("created")) or now, now, event)).fetchone()
+            (event_id, event_type, _ts(event_data.get("created")) or now, now, event_data)).fetchone()
         if not inserted:
             return {"ok": True, "duplicate": True, "event_id": event_id}
-        obj = event.get("data", {}).get("object", {})
+        obj = event_data.get("data", {}).get("object", {})
         handled = False
         if event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
             handled = _apply_subscription(conn, obj)
