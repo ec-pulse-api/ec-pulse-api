@@ -9,7 +9,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, HttpUrl
 
 from app.services.billing import create_checkout, process_webhook
-from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key
+from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
@@ -140,6 +140,10 @@ async def research_ingest(request: ResearchUrlRequest, api_key: str = Depends(ge
             item = await fetch_public_comments(str(url), request.max_comments_per_url)
             if item["comments"]:
                 item["analysis"] = analyze_comments(item["comments"], item["source"], item.get("locale"))
+                try:
+                    item["trend"] = save_research_run(api_key, item, item["analysis"])
+                except Exception as exc:
+                    item["trend"] = {"signal": "persistence_error", "error": type(exc).__name__}
             else:
                 item["analysis"] = {"comments_analyzed": 0, "pain_points": [], "top_terms": [], "recommended_angle": None}
             results.append(item)
