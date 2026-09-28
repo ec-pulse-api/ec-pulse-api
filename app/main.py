@@ -17,8 +17,23 @@ from app.services.consumer_insights import analyze_comments
 from app.services.research_ingest import fetch_public_comments
 from app.services.rate_limit import check_rate_limit
 
-app = FastAPI(title="EC Pulse API", description="EC product data API and market research service", version="0.12.0")
+app = FastAPI(
+    title="EC Pulse API",
+    description="Commerce data, product discovery, price monitoring, and market research infrastructure.",
+    version="0.12.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
 
 class ProductRequest(BaseModel):
     url: HttpUrl
@@ -141,9 +156,22 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-@app.get("/v1/pricing")
+@app.get("/v1/pricing", tags=["billing"])
 def pricing():
-    return {"currency":"USD","plans":{"free":{"credits":100,"rate_limit_per_minute":30},"pro":{"credits":"configurable","rate_limit_per_minute":300},"business":{"credits":"configurable","rate_limit_per_minute":3000}},"billing":"credit_based","note":"Paid pricing and automatic subscription provisioning will be connected next."}
+    return {
+        "currency": "USD",
+        "billing": "credit_based",
+        "plans": {
+            "free": {"credits": 100, "rate_limit_per_minute": 30},
+            "pro": {"credits": "configurable", "rate_limit_per_minute": 300},
+            "business": {"credits": "configurable", "rate_limit_per_minute": 3000},
+        },
+        "checkout": {
+            "pro": "/v1/billing/checkout?plan=pro",
+            "business": "/v1/billing/checkout?plan=business",
+        },
+        "customer_portal": "/v1/billing/portal",
+    }
 
 @app.post("/v1/consumer-insights/analyze")
 def consumer_insights(request: ConsumerInsightRequest, api_key: str = Depends(get_api_key)):
@@ -295,10 +323,16 @@ def monitor_opportunity(monitor_id:str,limit:int=100,api_key:str=Depends(get_api
     except KeyError as exc: raise HTTPException(status_code=404,detail="Monitor not found") from exc
     except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
 
-@app.get("/v1/account")
-def account(api_key:str=Depends(get_api_key)):
-    try: ensure_api_account(api_key); return get_account_usage(api_key)
-    except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
+@app.get("/v1/account", tags=["account"])
+def account(request: Request, response: Response, api_key: str = Depends(get_api_key)):
+    try:
+        ensure_api_account(api_key)
+        usage = get_account_usage(api_key)
+        for key, value in _usage_headers(request, api_key).items():
+            response.headers[key] = value
+        return usage
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 @app.get("/api/cron/check-monitors")
 async def check_monitors(authorization:str|None=Header(default=None)):
