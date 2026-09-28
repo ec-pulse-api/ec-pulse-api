@@ -16,7 +16,7 @@ from app.services.consumer_insights import analyze_comments
 from app.services.research_ingest import fetch_public_comments
 from app.services.rate_limit import check_rate_limit
 
-app = FastAPI(title="EC Pulse API", description="EC product data API and price monitoring service", version="0.11.0")
+app = FastAPI(title="EC Pulse API", description="EC product data API and market research service", version="0.12.0")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 class ProductRequest(BaseModel):
@@ -127,7 +127,7 @@ def pricing():
 @app.post("/v1/consumer-insights/analyze")
 def consumer_insights(request: ConsumerInsightRequest, api_key: str = Depends(get_api_key)):
     charge = _charge(api_key, "POST /v1/consumer-insights/analyze", max(1, len(request.comments) // 50))
-    result = analyze_comments(request.comments, request.source)
+    result = analyze_comments(request.comments, request.source, "en-US" if request.source and any(x in request.source.lower() for x in ["amazon.com", "reddit", "youtube.com", "tiktok.com"]) else None)
     result["credits"] = charge
     return result
 
@@ -139,7 +139,7 @@ async def research_ingest(request: ResearchUrlRequest, api_key: str = Depends(ge
         try:
             item = await fetch_public_comments(str(url), request.max_comments_per_url)
             if item["comments"]:
-                item["analysis"] = analyze_comments(item["comments"], item["source"])
+                item["analysis"] = analyze_comments(item["comments"], item["source"], item.get("locale"))
             else:
                 item["analysis"] = {"comments_analyzed": 0, "pain_points": [], "top_terms": [], "recommended_angle": None}
             results.append(item)
@@ -147,7 +147,26 @@ async def research_ingest(request: ResearchUrlRequest, api_key: str = Depends(ge
             results.append({"url": str(url), "ok": False, "error": f"http_{exc.response.status_code}"})
         except Exception as exc:
             results.append({"url": str(url), "ok": False, "error": type(exc).__name__})
-    return {"count": len(results), "credits": charge, "results": results}
+    market_summary = {}
+    for item in results:
+        if not item.get("analysis"):
+            continue
+        market = item.get("market", "GLOBAL")
+        bucket = market_summary.setdefault(market, {"urls": 0, "comments": 0, "pain_points": {}})
+        bucket["urls"] += 1
+        bucket["comments"] += item["analysis"].get("comments_analyzed", 0)
+        for pain in item["analysis"].get("pain_points", []):
+            bucket["pain_points"][pain["pain"]] = bucket["pain_points"].get(pain["pain"], 0) + pain["count"]
+
+    for bucket in market_summary.values():
+        bucket["top_pains"] = sorted(
+            [{"pain": pain, "count": count} for pain, count in bucket["pain_points"].items()],
+            key=lambda x: x["count"],
+            reverse=True,
+        )[:10]
+        del bucket["pain_points"]
+
+    return {"count": len(results), "credits": charge, "market_summary": market_summary, "results": results}
 
 @app.get("/v1/products")
 async def product_get(request:Request,response:Response,url:HttpUrl=Query(...),api_key:str=Depends(get_api_key)):
