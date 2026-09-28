@@ -126,7 +126,7 @@ async def fetch_product(url: str) -> dict[str, Any]:
         product.get("sku")
         or product.get("mpn")
         or product.get("gtin13")
-        or _product_id(marketplace, parsed.path)
+        or _product_id(marketplace, final_parsed.path)
     )
 
     title = product.get("name") or _meta(soup, "og:title") or (
