@@ -309,6 +309,63 @@ def save_research_run(api_key: str, item: dict, analysis: dict) -> dict:
     }
 
 
+def get_research_opportunity(api_key: str, run_id: str) -> dict:
+    owner = _account_hash(api_key)
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        run = conn.execute(
+            """SELECT id, url, source_type, market, locale, title, comments_count, created_at
+            FROM research_runs WHERE id = %s AND owner_key_hash = %s""",
+            (run_id, owner),
+        ).fetchone()
+        if not run:
+            raise KeyError(run_id)
+        pains = conn.execute(
+            """SELECT pain, count, share_percent FROM research_pain_points
+            WHERE run_id = %s ORDER BY count DESC LIMIT 10""",
+            (run_id,),
+        ).fetchall()
+        examples = conn.execute(
+            """SELECT body FROM research_comments WHERE run_id = %s
+            ORDER BY id LIMIT 30""",
+            (run_id,),
+        ).fetchall()
+
+    pain_rows = [{"pain": p[0], "count": p[1], "share_percent": p[2]} for p in pains]
+    top = pain_rows[0] if pain_rows else None
+    directions = []
+    for p in pain_rows[:5]:
+        directions.append({
+            "pain": p["pain"],
+            "product_direction": f"Reduce or eliminate {p['pain']}" if run[4] == "en-US" else f"「{p['pain']}」を減らす・解消する設計",
+            "validation": [
+                "独立した複数ソースで同じ不満が出ているか確認",
+                "既存商品の低評価理由と改善余地を比較",
+                "小ロット・低在庫で広告テストして反応を見る",
+            ],
+        })
+    ad_angles = []
+    for p in pain_rows[:5]:
+        pain = p["pain"]
+        if run[4] == "en-US":
+            ad_angles.append({"pain": pain, "hook": f"Still struggling with {pain}?", "proof": f"{p['count']} comments flagged this pain."})
+        else:
+            ad_angles.append({"pain": pain, "hook": f"「{pain}」で困っていませんか？", "proof": f"{p['count']}件のコメントで同じ痛点を検出。"})
+    return {
+        "run_id": run[0],
+        "source": {"url": run[1], "source_type": run[2], "market": run[3], "locale": run[4], "title": run[5]},
+        "evidence": {"comments_count": run[6], "captured_at": run[7].isoformat(), "examples": [x[0] for x in examples[:10]]},
+        "top_pain": top,
+        "product_directions": directions,
+        "ad_test_angles": ad_angles,
+        "next_actions": [
+            "上位痛点ごとに商品候補を検索",
+            "候補商品のレビューで痛点が改善されているか再確認",
+            "上位2〜3訴求を少額広告で比較",
+        ],
+    }
+
+
 async def run_due_monitors() -> dict:
     from app.services.product_parser import fetch_product
     now = datetime.now(timezone.utc)
