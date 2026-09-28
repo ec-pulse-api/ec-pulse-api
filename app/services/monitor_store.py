@@ -317,8 +317,8 @@ def list_research_runs(api_key: str, url: str | None = None, limit: int = 20) ->
         if url:
             runs = conn.execute(
                 """WITH ranked AS (
-                    SELECT rr.*, LAG(rr.id) OVER (PARTITION BY rr.url ORDER BY rr.created_at DESC) AS previous_run_id,
-                           LAG(rr.created_at) OVER (PARTITION BY rr.url ORDER BY rr.created_at DESC) AS previous_captured_at
+                    SELECT rr.*, LAG(rr.id) OVER (PARTITION BY rr.url ORDER BY rr.created_at ASC) AS previous_run_id,
+                           LAG(rr.created_at) OVER (PARTITION BY rr.url ORDER BY rr.created_at ASC) AS previous_captured_at
                     FROM research_runs rr
                     WHERE rr.owner_key_hash = %s AND rr.url = %s
                 )
