@@ -24,7 +24,7 @@ class FakeConn:
     def execute(self, sql, params=()):
         if "SELECT a.credits_balance" in sql:
             self.select_sql = sql
-            return FakeCursor((10,))
+            return FakeCursor(("account-hash", 10))
         return FakeCursor(None)
 
     def commit(self):
