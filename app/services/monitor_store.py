@@ -330,14 +330,29 @@ def create_monitor_with_credit(api_key: str, url: str, interval_minutes: int, we
     )
 
 def list_monitors(api_key: str) -> list[dict]:
-    owner = _account_hash(api_key)
+    key_hash = _account_hash(api_key)
     with psycopg.connect(_db_url()) as conn:
-        _init(conn); rows = conn.execute("SELECT id, url, interval_minutes, webhook_url, last_price, last_checked_at, created_at FROM monitors WHERE owner_key_hash = %s ORDER BY created_at DESC", (owner,)).fetchall()
+        _init(conn)
+        rows = conn.execute(
+            """SELECT m.id, m.url, m.interval_minutes, m.webhook_url, m.last_price, m.last_checked_at, m.created_at
+               FROM monitors m
+               JOIN api_keys k ON k.account_key_hash = m.owner_key_hash
+               WHERE k.api_key_hash = %s AND k.active = TRUE
+               ORDER BY m.created_at DESC""",
+            (key_hash,),
+        ).fetchall()
     return [{"id": r[0], "url": r[1], "interval_minutes": r[2], "webhook_url": r[3], "last_price": r[4], "last_checked_at": r[5].isoformat() if r[5] else None, "created_at": r[6].isoformat()} for r in rows]
 
 def _owned_monitor(conn, api_key: str, monitor_id: str):
-    row = conn.execute("SELECT id, url, last_price, last_checked_at FROM monitors WHERE id = %s AND owner_key_hash = %s", (monitor_id, _account_hash(api_key))).fetchone()
-    if not row: raise KeyError(monitor_id)
+    row = conn.execute(
+        """SELECT m.id, m.url, m.last_price, m.last_checked_at
+           FROM monitors m
+           JOIN api_keys k ON k.account_key_hash = m.owner_key_hash
+           WHERE m.id = %s AND k.api_key_hash = %s AND k.active = TRUE""",
+        (monitor_id, _account_hash(api_key)),
+    ).fetchone()
+    if not row:
+        raise KeyError(monitor_id)
     return row
 
 def _history_rows(conn, monitor_id: str, limit: int):
