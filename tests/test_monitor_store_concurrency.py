@@ -56,3 +56,14 @@ def test_research_previous_run_order_has_stable_id_tiebreaker(monkeypatch):
 
     sql = next(event[1] for event in conn.events if event[0] == "execute" and event[1].startswith("SELECT rr.id, rr.created_at"))
     assert "ORDER BY rr.created_at DESC, rr.id DESC" in sql
+
+
+def test_research_list_order_has_stable_id_tiebreaker(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
+    monkeypatch.setattr(monitor_store.psycopg, "connect", lambda *_args, **_kwargs: conn)
+    monkeypatch.setattr(monitor_store, "_SCHEMA_READY", True)
+
+    monitor_store.list_research_runs("ecp_live_test-key")
+    sql = next(event[1] for event in conn.events if event[0] == "execute" and event[1].startswith("WITH ranked AS"))
+    assert "ORDER BY rr.created_at ASC, rr.id ASC" in sql
