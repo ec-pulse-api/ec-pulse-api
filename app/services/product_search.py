@@ -112,6 +112,7 @@ def _amazon_item(item: dict) -> dict:
 
 
 async def _search_amazon_official(query: str, limit: int) -> list[dict]:
+    global _amazon_access_token, _amazon_token_expires_at
     partner_tag = os.getenv("AMAZON_PARTNER_TAG")
     if not partner_tag:
         raise RuntimeError("AMAZON_PARTNER_TAG is not configured")
