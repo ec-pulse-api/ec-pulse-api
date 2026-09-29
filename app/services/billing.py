@@ -27,6 +27,7 @@ def _init_billing(conn):
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS subscription_status TEXT")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS current_period_start TIMESTAMPTZ")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMPTZ")
+    conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS last_stripe_event_created BIGINT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_accounts_stripe_customer ON api_accounts (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_accounts_stripe_subscription ON api_accounts (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL")
     conn.commit()
@@ -57,7 +58,7 @@ def _account_by_customer(conn, customer_id: str):
     return conn.execute("SELECT api_key_hash FROM api_accounts WHERE stripe_customer_id = %s", (customer_id,)).fetchone()
 
 
-def _apply_subscription(conn, subscription):
+def _apply_subscription(conn, subscription, event_created: int | None = None):
     customer_id = subscription.get("customer")
     subscription_id = subscription.get("id")
     status = subscription.get("status")
@@ -67,13 +68,16 @@ def _apply_subscription(conn, subscription):
     row = _account_by_customer(conn, customer_id) if customer_id else None
     if not row:
         return False
+    state = conn.execute("SELECT last_stripe_event_created FROM api_accounts WHERE api_key_hash = %s", (row[0],)).fetchone()
+    if event_created is not None and state and state[0] is not None and event_created < state[0]:
+        return False
     values = (subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), datetime.now(timezone.utc), row[0])
     if plan:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
-            current_period_start=%s, current_period_end=%s, updated_at=%s WHERE api_key_hash=%s""", (plan, *values))
+            current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, updated_at=%s WHERE api_key_hash=%s""", (plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, datetime.now(timezone.utc), row[0]))
     else:
         conn.execute("""UPDATE api_accounts SET stripe_subscription_id=%s, subscription_status=%s,
-            current_period_start=%s, current_period_end=%s, updated_at=%s WHERE api_key_hash=%s""", values)
+            current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, updated_at=%s WHERE api_key_hash=%s""", (subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, datetime.now(timezone.utc), row[0]))
     return True
 
 
@@ -97,7 +101,7 @@ def process_webhook(payload: bytes, signature: str) -> dict:
         obj = event_data.get("data", {}).get("object", {})
         handled = False
         if event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
-            handled = _apply_subscription(conn, obj)
+            handled = _apply_subscription(conn, obj, event_data.get("created"))
             if event_type == "customer.subscription.deleted" and handled:
                 conn.execute("UPDATE api_accounts SET plan='free', subscription_status='canceled', updated_at=%s WHERE stripe_subscription_id=%s", (now, obj.get("id")))
         elif event_type == "checkout.session.completed":
