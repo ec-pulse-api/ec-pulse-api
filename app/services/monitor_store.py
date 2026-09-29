@@ -619,6 +619,18 @@ async def run_due_monitors() -> dict:
 
             with psycopg.connect(_db_url()) as conn:
                 _init(conn)
+                lease_owned = conn.execute(
+                    """SELECT 1
+                    FROM monitor_run_leases
+                    WHERE monitor_id = %s
+                      AND lease_token = %s
+                      AND locked_until > CURRENT_TIMESTAMP
+                    FOR UPDATE""",
+                    (monitor_id, lease_token),
+                ).fetchone()
+                if not lease_owned:
+                    continue
+
                 conn.execute(
                     "INSERT INTO price_history (monitor_id, price, currency, captured_at, source_url) VALUES (%s, %s, %s, %s, %s)",
                     (monitor_id, new_price, currency, data["captured_at"], source_url),
