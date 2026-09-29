@@ -17,6 +17,7 @@ from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
 from app.services.research_ingest import fetch_public_comments
 from app.services.rate_limit import check_rate_limit
+from app.services.request_signature import verify_request_signature
 from app.services.url_safety import validate_public_url
 
 app = FastAPI(
@@ -61,12 +62,28 @@ class MonitorRequest(BaseModel):
 def _key_hash(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()
 
-def get_api_key(request: Request, api_key: str | None = Depends(api_key_header)) -> str:
+async def get_api_key(request: Request, api_key: str | None = Depends(api_key_header)) -> str:
     if not api_key:
         raise HTTPException(status_code=401, detail="Missing API key")
     try:
         if not validate_api_key(api_key):
             raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+        require_signature = os.getenv("EC_PULSE_REQUIRE_REQUEST_SIGNATURE", "").lower() in {"1", "true", "yes"}
+        timestamp = request.headers.get("X-EC-Timestamp")
+        signature = request.headers.get("X-EC-Signature")
+        if require_signature or timestamp or signature:
+            body = await request.body()
+            try:
+                verify_request_signature(
+                    api_key,
+                    timestamp,
+                    signature,
+                    request.method,
+                    request.url.path,
+                    body,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=401, detail=str(exc)) from exc
         account = ensure_api_account(api_key)
         rate = check_rate_limit(_key_hash(api_key), account["plan"])
         request.state.rate_limit = rate
