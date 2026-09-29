@@ -39,6 +39,43 @@ def _yahoo_item(item: dict) -> dict:
     }
 
 
+RAKUTEN_API_URL = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20260701"
+
+
+def _rakuten_item(item: dict) -> dict:
+    return {
+        "url": item.get("itemUrl"),
+        "cache_hit": False,
+        "product": {
+            "product": {"title": item.get("itemName"), "brand": None, "model": None, "sku": item.get("itemCode"), "gtin": None, "product_id": item.get("itemCode")},
+            "pricing": {"price": float(item.get("itemPrice")) if isinstance(item.get("itemPrice"), (int, float)) else None, "list_price": None, "currency": "JPY"},
+            "availability": {"status": "InStock"},
+            "rating": {"score": item.get("reviewAverage"), "count": item.get("reviewCount", 0)},
+            "seller": {"name": item.get("shopName")},
+            "source": {"site": "rakuten.co.jp", "marketplace": "rakuten", "product_id": item.get("itemCode"), "url": item.get("itemUrl"), "image": None},
+        },
+    }
+
+
+async def _search_rakuten_official(query: str, limit: int) -> list[dict]:
+    app_id = os.getenv("RAKUTEN_APPLICATION_ID")
+    access_key = os.getenv("RAKUTEN_ACCESS_KEY")
+    if not app_id or not access_key:
+        raise RuntimeError("Rakuten API credentials are not configured")
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(
+            RAKUTEN_API_URL,
+            params={"applicationId": app_id, "accessKey": access_key, "format": "json", "formatVersion": 2, "keyword": query, "hits": min(limit, 30), "sort": "+itemPrice"},
+            headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    items = payload.get("items", [])
+    if not isinstance(items, list):
+        raise ValueError("Invalid Rakuten API response")
+    return [_rakuten_item(item) for item in items[:limit] if isinstance(item, dict)]
+
+
 async def _search_yahoo_official(query: str, limit: int) -> list[dict]:
     app_id = os.getenv("YAHOO_SHOPPING_APP_ID")
     if not app_id:
@@ -108,7 +145,7 @@ async def _search_marketplace(marketplace: str, query: str, limit: int) -> list[
 
 async def search_products(query: str, marketplaces: list[str], limit: int) -> dict:
     results_by_marketplace = await asyncio.gather(
-        *(_search_yahoo_official(query, limit) if marketplace == "yahoo" and os.getenv("YAHOO_SHOPPING_APP_ID") else _search_marketplace(marketplace, query, limit) for marketplace in marketplaces),
+        *(_search_yahoo_official(query, limit) if marketplace == "yahoo" and os.getenv("YAHOO_SHOPPING_APP_ID") else _search_rakuten_official(query, limit) if marketplace == "rakuten" and os.getenv("RAKUTEN_APPLICATION_ID") and os.getenv("RAKUTEN_ACCESS_KEY") else _search_marketplace(marketplace, query, limit) for marketplace in marketplaces),
         return_exceptions=True,
     )
 
@@ -124,6 +161,9 @@ async def search_products(query: str, marketplaces: list[str], limit: int) -> di
             continue
 
         if marketplace == "yahoo" and os.getenv("YAHOO_SHOPPING_APP_ID"):
+            candidates.append({"marketplace": marketplace, "ok": True, "results": result})
+            continue
+        if marketplace == "rakuten" and os.getenv("RAKUTEN_APPLICATION_ID") and os.getenv("RAKUTEN_ACCESS_KEY"):
             candidates.append({"marketplace": marketplace, "ok": True, "results": result})
             continue
 
