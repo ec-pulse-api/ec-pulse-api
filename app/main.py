@@ -86,6 +86,10 @@ def _charge(api_key: str, endpoint: str, credits: int = 1):
         if "Invalid or revoked API key" in message: raise HTTPException(status_code=401, detail=message) from exc
         raise HTTPException(status_code=503, detail=message) from exc
 
+def _consumer_insight_credit_cost(comment_count: int) -> int:
+    return max(1, (comment_count + 49) // 50)
+
+
 def _usage_headers(request: Request, api_key: str, result: dict | None = None) -> dict[str,str]:
     try:
         account = ensure_api_account(api_key)
@@ -206,7 +210,7 @@ def pricing():
 
 @app.post("/v1/consumer-insights/analyze")
 def consumer_insights(request: ConsumerInsightRequest, request_http: Request, response: Response, api_key: str = Depends(get_api_key)):
-    charge = _charge(api_key, "POST /v1/consumer-insights/analyze", max(1, len(request.comments) // 50))
+    charge = _charge(api_key, "POST /v1/consumer-insights/analyze", _consumer_insight_credit_cost(len(request.comments)))
     for k, v in _usage_headers(request_http, api_key, charge).items():
         response.headers[k] = v
     result = analyze_comments(request.comments, request.source, "en-US" if request.source and any(x in request.source.lower() for x in ["amazon.com", "reddit", "youtube.com", "tiktok.com"]) else None)
