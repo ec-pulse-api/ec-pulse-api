@@ -14,11 +14,13 @@ class FakeConn:
         self.updates = 0
         self.last_params = None
         self.state = state
+        self.state_sql = None
 
     def execute(self, sql, params=()):
         if "SELECT api_key_hash" in sql:
             return FakeCursor([("account-hash",)])
         if "SELECT last_stripe_event_created" in sql:
+            self.state_sql = sql
             return FakeCursor([self.state])
         self.updates += 1
         self.last_params = params
@@ -82,3 +84,10 @@ def test_same_timestamp_does_not_compare_ids(monkeypatch):
     conn = FakeConn((100, "evt_002"))
     assert _apply_subscription(conn, _subscription("active", "evt_001"), 100) is True
     assert conn.updates == 1
+
+
+def test_subscription_state_row_is_locked_during_update(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    conn = FakeConn()
+    assert _apply_subscription(conn, _subscription("active"), 100) is True
+    assert "FOR UPDATE" in conn.state_sql
