@@ -10,13 +10,16 @@ class FakeCursor:
 
 
 class FakeConn:
-    def __init__(self):
+    def __init__(self, state=(None, None)):
         self.updates = 0
         self.last_params = None
+        self.state = state
 
     def execute(self, sql, params=()):
         if "SELECT api_key_hash" in sql:
             return FakeCursor([("account-hash",)])
+        if "SELECT last_stripe_event_created" in sql:
+            return FakeCursor([self.state])
         self.updates += 1
         self.last_params = params
         return FakeCursor([])
@@ -65,3 +68,24 @@ def test_event_id_does_not_act_as_fake_ordering(monkeypatch):
     subscription["_ec_pulse_event_id"] = "evt_999"
     assert _apply_subscription(conn, subscription, 100) is True
     assert conn.updates == 2
+
+
+def test_older_event_created_is_ignored(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    conn = FakeConn((200, "evt_002"))
+    assert _apply_subscription(conn, _subscription("active"), 100) is False
+    assert conn.updates == 0
+
+
+def test_same_timestamp_older_event_id_is_ignored(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    conn = FakeConn((100, "evt_002"))
+    assert _apply_subscription(conn, _subscription("active"), 100) is False
+    assert conn.updates == 0
+
+
+def test_same_timestamp_newer_event_id_is_applied(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    conn = FakeConn((100, "evt_001"))
+    assert _apply_subscription(conn, _subscription("active"), 100) is True
+    assert conn.updates == 1
