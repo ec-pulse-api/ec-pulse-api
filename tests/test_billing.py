@@ -170,7 +170,7 @@ def test_checkout_rejects_existing_active_subscription(monkeypatch):
 
     class Cursor:
         def fetchone(self):
-            return ("cus_123", "sub_123", "active")
+            return ("account-hash", "cus_123", "sub_123", "active")
 
     class Conn:
         def execute(self, sql, params=()):
@@ -203,7 +203,7 @@ def test_checkout_holds_account_lock_through_stripe_call(monkeypatch):
 
     class Cursor:
         def fetchone(self):
-            return (None, None, None)
+            return ("account-hash", None, None, None)
 
     class Conn:
         def __init__(self):
@@ -245,3 +245,40 @@ def test_checkout_holds_account_lock_through_stripe_call(monkeypatch):
     assert result == "https://checkout.example/session"
     assert conn.committed is True
     assert "FOR UPDATE" in conn.sql
+
+
+def test_checkout_uses_owning_account_hash_in_metadata(monkeypatch):
+    import app.services.billing as billing
+
+    class Cursor:
+        def fetchone(self):
+            return ("account-hash", None, None, None)
+
+    class Conn:
+        def execute(self, sql, params=()):
+            return Cursor()
+        def commit(self):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    class Checkout:
+        @staticmethod
+        def create(**kwargs):
+            assert kwargs["metadata"]["api_key_hash"] == "account-hash"
+            return type("Session", (), {"url": "https://checkout.example/session"})()
+
+    class FakeStripe:
+        checkout = type("CheckoutContainer", (), {"Session": Checkout})
+
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    monkeypatch.setenv("APP_BASE_URL", "https://example.com")
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: Conn())
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr(billing, "_account_hash", lambda key: "key-hash")
+
+    assert billing.create_checkout("shared-key", "pro") == "https://checkout.example/session"
