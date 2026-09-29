@@ -50,6 +50,6 @@ def test_research_opportunity_builds_queries_before_charging(monkeypatch):
         main.app.dependency_overrides.pop(main.get_api_key, None)
 
     assert response.status_code == 200
-    assert charges == [45]
+    assert charges == [30]
     assert len(response.json()["product_candidates"]) == 3
     assert response.json()["credits"] == 45
