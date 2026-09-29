@@ -260,6 +260,8 @@ def create_checkout(api_key: str, plan: str) -> str:
         now = datetime.now(timezone.utc)
         if row and row[4] and row[5] and row[5] > now:
             raise ValueError("A Stripe checkout is already in progress for this account")
+        if not row:
+            raise ValueError("Invalid or revoked API key")
         checkout_key = str(uuid.uuid4())
         pending_until = now + timedelta(minutes=10)
         conn.execute(
