@@ -212,7 +212,13 @@ def create_customer_portal(api_key: str) -> str:
     from app.services.monitor_store import _account_hash
     with psycopg.connect(_db_url()) as conn:
         _init_billing(conn)
-        row = conn.execute("SELECT stripe_customer_id FROM api_accounts WHERE api_key_hash=%s", (_account_hash(api_key),)).fetchone()
+        row = conn.execute(
+            """SELECT a.stripe_customer_id
+            FROM api_keys k
+            JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+            WHERE k.api_key_hash=%s AND k.active=TRUE""",
+            (_account_hash(api_key),),
+        ).fetchone()
     customer_id = row[0] if row else None
     if not customer_id:
         raise ValueError("No Stripe customer is linked to this account")
@@ -234,16 +240,18 @@ def create_checkout(api_key: str, plan: str) -> str:
     with psycopg.connect(_db_url()) as conn:
         _init_billing(conn)
         row = conn.execute(
-            """SELECT stripe_customer_id, stripe_subscription_id, subscription_status
-               FROM api_accounts
-               WHERE api_key_hash=%s
-               FOR UPDATE""",
+            """SELECT a.api_key_hash, a.stripe_customer_id, a.stripe_subscription_id, a.subscription_status
+               FROM api_keys k
+               JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+               WHERE k.api_key_hash=%s AND k.active=TRUE
+               FOR UPDATE OF a""",
             (_account_hash(api_key),),
         ).fetchone()
-        customer_id = row[0] if row else None
-        if row and row[1] and row[2] in {"active", "trialing", "past_due"}:
+        account_hash = row[0] if row else None
+        customer_id = row[1] if row else None
+        if row and row[2] and row[3] in {"active", "trialing", "past_due"}:
             raise ValueError("An active Stripe subscription is already linked to this account")
-        params = {"mode": "subscription", "line_items": [{"price": price_id, "quantity": 1}], "success_url": f"{base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}", "cancel_url": f"{base_url}/billing/cancel", "metadata": {"api_key_hash": _account_hash(api_key), "plan": plan}}
+        params = {"mode": "subscription", "line_items": [{"price": price_id, "quantity": 1}], "success_url": f"{base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}", "cancel_url": f"{base_url}/billing/cancel", "metadata": {"api_key_hash": account_hash, "plan": plan}}
         if customer_id:
             params["customer"] = customer_id
         # Keep the row lock until Stripe creates the session. Otherwise two
