@@ -46,3 +46,24 @@ def test_consume_credit_locks_key_and_account_rows_together(monkeypatch):
     assert "FOR UPDATE OF k, a" in conn.select_sql
     assert conn.commits == 1
     assert conn.update_params[-1] == "account-hash"
+
+
+def test_ensure_api_account_resolves_owning_account(monkeypatch):
+    class Cursor:
+        def fetchone(self):
+            return ("pro", 97, __import__("datetime").datetime(2026, 9, 29), __import__("datetime").datetime(2026, 9, 29))
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, sql, params=()):
+            assert "JOIN api_accounts a ON a.api_key_hash = k.account_key_hash" in sql
+            assert "k.active = TRUE" in sql
+            return Cursor()
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
+    monkeypatch.setattr(monitor_store.psycopg, "connect", lambda *_args, **_kwargs: Conn())
+    monkeypatch.setattr(monitor_store, "_SCHEMA_READY", True)
+    result = monitor_store.ensure_api_account("ecp_live_shared-key")
+    assert result["plan"] == "pro"
+    assert result["credits_balance"] == 97
