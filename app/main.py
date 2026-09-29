@@ -285,7 +285,11 @@ def research_runs(
 async def research_opportunity(run_id: str, request_http: Request, response: Response, api_key: str = Depends(get_api_key)):
     try:
         result = get_research_opportunity(api_key, run_id)
-        charge = _charge(\n            api_key,\n            "GET /v1/research/runs/{run_id}/opportunity",\n            _research_opportunity_credit_cost(len(queries), marketplaces=3, limit=5),\n        )
+        charge = _charge(
+            api_key,
+            "GET /v1/research/runs/{run_id}/opportunity",
+            _research_opportunity_credit_cost(len(queries), marketplaces=3, limit=5),
+        )
         for k, v in _usage_headers(request_http, api_key, charge).items():
             response.headers[k] = v
         queries = []
