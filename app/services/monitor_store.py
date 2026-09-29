@@ -541,6 +541,19 @@ async def _deliver_pending_webhooks() -> int:
             try:
                 await validate_public_url(webhook_url)
                 event = json.loads(payload_text)
+                with psycopg.connect(_db_url()) as conn:
+                    _init(conn)
+                    lease_owned = conn.execute(
+                        """SELECT 1
+                        FROM webhook_deliveries
+                        WHERE event_id = %s
+                          AND lease_token = %s
+                          AND locked_until > CURRENT_TIMESTAMP
+                        FOR UPDATE""",
+                        (event_id, claim_token),
+                    ).fetchone()
+                    if not lease_owned:
+                        continue
                 async with client.stream(
                     "POST", webhook_url, json=event,
                     headers={"X-EC-Pulse-Event-ID": event_id},
