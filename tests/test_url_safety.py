@@ -29,3 +29,11 @@ async def test_url_credentials_are_rejected():
 
     with pytest.raises(ValueError):
         await validate_public_url("https://user:pass@example.com/")
+
+
+@pytest.mark.asyncio
+async def test_oversized_url_is_rejected():
+    from app.services.url_safety import validate_public_url
+
+    with pytest.raises(ValueError):
+        await validate_public_url("https://example.com/" + "a" * 2048)
