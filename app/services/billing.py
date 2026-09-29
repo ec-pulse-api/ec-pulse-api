@@ -240,11 +240,15 @@ def create_checkout(api_key: str, plan: str) -> str:
                FOR UPDATE""",
             (_account_hash(api_key),),
         ).fetchone()
-    customer_id = row[0] if row else None
-    if row and row[1] and row[2] in {"active", "trialing", "past_due"}:
-        raise ValueError("An active Stripe subscription is already linked to this account")
-    params = {"mode": "subscription", "line_items": [{"price": price_id, "quantity": 1}], "success_url": f"{base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}", "cancel_url": f"{base_url}/billing/cancel", "metadata": {"api_key_hash": _account_hash(api_key), "plan": plan}}
-    if customer_id:
-        params["customer"] = customer_id
-    session = _stripe().checkout.Session.create(**params)
+        customer_id = row[0] if row else None
+        if row and row[1] and row[2] in {"active", "trialing", "past_due"}:
+            raise ValueError("An active Stripe subscription is already linked to this account")
+        params = {"mode": "subscription", "line_items": [{"price": price_id, "quantity": 1}], "success_url": f"{base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}", "cancel_url": f"{base_url}/billing/cancel", "metadata": {"api_key_hash": _account_hash(api_key), "plan": plan}}
+        if customer_id:
+            params["customer"] = customer_id
+        # Keep the row lock until Stripe creates the session. Otherwise two
+        # concurrent requests can both observe no active subscription and each
+        # create a separate checkout session.
+        session = _stripe().checkout.Session.create(**params)
+        conn.commit()
     return session.url
