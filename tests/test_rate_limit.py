@@ -43,7 +43,7 @@ def test_free_rate_limit_blocks_after_30_requests(monkeypatch):
     assert first["allowed"] is True
     assert first["remaining"] == 29
 
-    for _ in range(28):
+    for _ in range(29):
         assert rate_limit.check_rate_limit("hash", "free")["allowed"] is True
 
     blocked = rate_limit.check_rate_limit("hash", "free")
