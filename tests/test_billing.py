@@ -279,7 +279,7 @@ def test_checkout_uses_owning_account_hash_in_metadata(monkeypatch):
             assert kwargs["metadata"]["api_key_hash"] == "account-hash"
             assert kwargs["metadata"]["checkout_pending_key"]
 
-            return type("Session", (), {"url": "https://checkout.example/session"})()
+            return type("Session", (), {"id": "cs_test", "url": "https://checkout.example/session"})()
 
     class FakeStripe:
         checkout = type("CheckoutContainer", (), {"Session": Checkout})
