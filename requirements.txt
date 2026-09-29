@@ -5,3 +5,4 @@ beautifulsoup4
 psycopg[binary]
 stripe
 pytest
+pytest-asyncio
