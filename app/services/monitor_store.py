@@ -175,7 +175,13 @@ def ensure_api_account(api_key: str) -> dict:
     key_hash = _account_hash(api_key)
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
-        row = conn.execute("SELECT plan, credits_balance, created_at, updated_at FROM api_accounts WHERE api_key_hash = %s", (key_hash,)).fetchone()
+        row = conn.execute(
+            """SELECT a.plan, a.credits_balance, a.created_at, a.updated_at
+            FROM api_keys k
+            JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+            WHERE k.api_key_hash = %s AND k.active = TRUE""",
+            (key_hash,),
+        ).fetchone()
         if not row: raise RuntimeError("API key is not provisioned")
     return {"plan": row[0], "credits_balance": row[1], "created_at": row[2].isoformat(), "updated_at": row[3].isoformat()}
 
