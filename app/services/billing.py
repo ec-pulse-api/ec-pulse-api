@@ -163,9 +163,10 @@ def cancel_subscription(api_key: str, at_period_end: bool = True) -> dict:
         row = conn.execute(
             """SELECT stripe_customer_id, stripe_subscription_id, subscription_status,
                       current_period_end, cancel_at_period_end
-               FROM api_accounts
-               WHERE api_key_hash=%s
-               FOR UPDATE""",
+               FROM api_accounts a
+            JOIN api_keys k ON k.account_key_hash = a.api_key_hash
+               WHERE k.api_key_hash=%s AND k.active=TRUE
+               FOR UPDATE OF a""",
             (key_hash,),
         ).fetchone()
         if not row or not row[1]:
