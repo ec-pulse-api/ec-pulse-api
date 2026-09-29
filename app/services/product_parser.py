@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
-from app.services.url_safety import MAX_REDIRECTS, next_redirect, validate_public_url
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, safe_async_client, validate_public_url
 
 import httpx
 from bs4 import BeautifulSoup
@@ -96,7 +96,7 @@ def _product_id(marketplace: str, path: str) -> str | None:
 
 async def fetch_product(url: str) -> dict[str, Any]:
     current_url = await validate_public_url(url)
-    async with httpx.AsyncClient(
+    async with safe_async_client(
         follow_redirects=False,
         timeout=15.0,
         headers={
