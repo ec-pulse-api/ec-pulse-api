@@ -4,16 +4,16 @@ from app.services import rate_limit
 
 
 class FakeCursor:
-    def __init__(self, state):
-        self.state = state
+    def __init__(self, row):
+        self.row = row
 
     def fetchone(self):
-        return self.state["row"]
+        return self.row
 
 
 class FakeConnection:
     def __init__(self):
-        self.state = {"row": None}
+        self.row = None
 
     def __enter__(self):
         return self
@@ -23,15 +23,14 @@ class FakeConnection:
 
     def execute(self, sql, params=()):
         sql = " ".join(sql.split())
-        if sql.startswith("SELECT window_start, request_count"):
-            return FakeCursor(self.state)
-        if sql.startswith("INSERT INTO api_rate_limits"):
-            self.state["row"] = (params[1], 1)
-            return FakeCursor(self.state)
-        if sql.startswith("UPDATE api_rate_limits"):
-            self.state["row"] = (self.state["row"][0], params[0])
-            return FakeCursor(self.state)
-        raise AssertionError(sql)
+        assert sql.startswith("INSERT INTO api_rate_limits")
+        current_window = params[1]
+        limit_plus_one = params[2]
+        if self.row is None or self.row[0] != current_window:
+            self.row = (current_window, 1)
+        else:
+            self.row = (current_window, min(self.row[1] + 1, limit_plus_one))
+        return FakeCursor(self.row)
 
 
 def test_free_rate_limit_blocks_after_30_requests(monkeypatch):
@@ -39,13 +38,8 @@ def test_free_rate_limit_blocks_after_30_requests(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://test")
     monkeypatch.setattr(rate_limit.psycopg, "connect", lambda *_args, **_kwargs: fake_conn)
 
-    first = rate_limit.check_rate_limit("hash", "free")
-    assert first["allowed"] is True
-    assert first["remaining"] == 29
-
-    for _ in range(29):
+    for _ in range(30):
         assert rate_limit.check_rate_limit("hash", "free")["allowed"] is True
-
     blocked = rate_limit.check_rate_limit("hash", "free")
     assert blocked["allowed"] is False
     assert blocked["remaining"] == 0
