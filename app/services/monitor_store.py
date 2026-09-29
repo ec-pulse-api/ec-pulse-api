@@ -561,7 +561,7 @@ async def _deliver_pending_webhooks() -> int:
                     response.raise_for_status()
                     await read_response_bytes(response, MAX_WEBHOOK_RESPONSE_BYTES)
                 with psycopg.connect(_db_url()) as conn:
-                    conn.execute(
+                    cursor = conn.execute(
                         """UPDATE webhook_deliveries
                         SET status='delivered', delivered_at=%s, locked_until=NULL,
                             lease_token=NULL, last_error=NULL
@@ -569,6 +569,8 @@ async def _deliver_pending_webhooks() -> int:
                         (datetime.now(timezone.utc), event_id, claim_token),
                     )
                     conn.commit()
+                if cursor.rowcount != 1:
+                    continue
                 delivered += 1
             except Exception as exc:
                 attempts += 1
