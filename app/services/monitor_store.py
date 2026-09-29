@@ -208,12 +208,13 @@ def consume_credit(api_key: str, endpoint: str, credits: int = 1) -> dict:
     key_hash = _account_hash(api_key); now = datetime.now(timezone.utc)
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
-        row = conn.execute("""SELECT a.credits_balance FROM api_accounts a JOIN api_keys k ON k.account_key_hash = a.api_key_hash
+        row = conn.execute("""SELECT a.api_key_hash, a.credits_balance FROM api_accounts a JOIN api_keys k ON k.account_key_hash = a.api_key_hash
             WHERE k.api_key_hash = %s AND k.active = TRUE FOR UPDATE OF k, a""", (key_hash,)).fetchone()
         if not row: raise RuntimeError("Invalid or revoked API key")
-        if row[0] < credits: raise RuntimeError("Insufficient API credits")
-        remaining = row[0] - credits
-        conn.execute("UPDATE api_accounts SET credits_balance = %s, updated_at = %s WHERE api_key_hash = %s", (remaining, now, key_hash))
+        account_hash, balance = row
+        if balance < credits: raise RuntimeError("Insufficient API credits")
+        remaining = balance - credits
+        conn.execute("UPDATE api_accounts SET credits_balance = %s, updated_at = %s WHERE api_key_hash = %s", (remaining, now, account_hash))
         conn.execute("UPDATE api_keys SET last_used_at = %s WHERE api_key_hash = %s", (now, key_hash))
         conn.execute("INSERT INTO api_usage (api_key_hash, endpoint, credits, created_at) VALUES (%s, %s, %s, %s)", (key_hash, endpoint, credits, now)); conn.commit()
     return {"credits_used": credits, "credits_remaining": remaining}
