@@ -91,3 +91,28 @@ async def test_safe_transport_rejects_dns_rebinding_to_private_ip(monkeypatch):
 
     with pytest.raises(ValueError, match="Private or local network"):
         await backend.connect_tcp("example.com", 443)
+
+
+@pytest.mark.asyncio
+async def test_read_response_bytes_enforces_hard_limit():
+    from app.services.url_safety import read_response_bytes
+
+    class FakeResponse:
+        async def aiter_bytes(self):
+            yield b"a" * 4
+            yield b"b" * 4
+
+    with pytest.raises(ValueError, match="HTTP response is too large"):
+        await read_response_bytes(FakeResponse(), 7)
+
+
+@pytest.mark.asyncio
+async def test_read_response_bytes_reads_within_limit():
+    from app.services.url_safety import read_response_bytes
+
+    class FakeResponse:
+        async def aiter_bytes(self):
+            yield b"abc"
+            yield b"def"
+
+    assert await read_response_bytes(FakeResponse(), 6) == b"abcdef"
