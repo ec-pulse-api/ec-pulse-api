@@ -1,5 +1,6 @@
 import os
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 import stripe
@@ -30,6 +31,8 @@ def _init_billing(conn):
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMPTZ")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS last_stripe_event_created BIGINT")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS last_stripe_event_id TEXT")
+    conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS checkout_pending_key TEXT")
+    conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS checkout_pending_until TIMESTAMPTZ")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_accounts_stripe_customer ON api_accounts (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_accounts_stripe_subscription ON api_accounts (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL")
     conn.commit()
@@ -127,7 +130,7 @@ def process_webhook(payload: bytes, signature: str) -> dict:
             api_key_hash = (obj.get("metadata") or {}).get("api_key_hash")
             if customer_id and api_key_hash:
                 conn.execute(
-                    "UPDATE api_accounts SET stripe_customer_id=%s, updated_at=%s WHERE api_key_hash=%s",
+                    "UPDATE api_accounts SET stripe_customer_id=%s, checkout_pending_key=NULL, checkout_pending_until=NULL, updated_at=%s WHERE api_key_hash=%s",
                     (customer_id, now, api_key_hash),
                 )
                 handled = True
@@ -240,24 +243,44 @@ def create_checkout(api_key: str, plan: str) -> str:
     from app.services.monitor_store import _account_hash
     with psycopg.connect(_db_url()) as conn:
         _init_billing(conn)
+        account_hash = _account_hash(api_key)
         row = conn.execute(
-            """SELECT a.api_key_hash, a.stripe_customer_id, a.stripe_subscription_id, a.subscription_status
-               FROM api_keys k
-               JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
-               WHERE k.api_key_hash=%s AND k.active=TRUE
-               FOR UPDATE OF a""",
-            (_account_hash(api_key),),
+            """SELECT stripe_customer_id, stripe_subscription_id, subscription_status,
+                      checkout_pending_key, checkout_pending_until
+               FROM api_accounts
+               WHERE api_key_hash=%s
+               FOR UPDATE""",
+            (account_hash,),
         ).fetchone()
-        account_hash = row[0] if row else None
-        customer_id = row[1] if row else None
-        if row and row[2] and row[3] in {"active", "trialing", "past_due"}:
+        customer_id = row[0] if row else None
+        if row and row[1] and row[2] in {"active", "trialing", "past_due"}:
             raise ValueError("An active Stripe subscription is already linked to this account")
-        params = {"mode": "subscription", "line_items": [{"price": price_id, "quantity": 1}], "success_url": f"{base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}", "cancel_url": f"{base_url}/billing/cancel", "metadata": {"api_key_hash": account_hash, "plan": plan}}
-        if customer_id:
-            params["customer"] = customer_id
-        # Keep the row lock until Stripe creates the session. Otherwise two
-        # concurrent requests can both observe no active subscription and each
-        # create a separate checkout session.
-        session = _stripe().checkout.Session.create(**params)
+        now = datetime.now(timezone.utc)
+        if row and row[3] and row[4] and row[4] > now:
+            raise ValueError("A Stripe checkout is already in progress for this account")
+        checkout_key = str(uuid.uuid4())
+        pending_until = now + timedelta(minutes=10)
+        conn.execute(
+            "UPDATE api_accounts SET checkout_pending_key=%s, checkout_pending_until=%s, updated_at=%s WHERE api_key_hash=%s",
+            (checkout_key, pending_until, now, account_hash),
+        )
         conn.commit()
+
+    params = {"mode": "subscription", "line_items": [{"price": price_id, "quantity": 1}], "success_url": f"{base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}", "cancel_url": f"{base_url}/billing/cancel", "metadata": {"api_key_hash": account_hash, "plan": plan}}
+    if customer_id:
+        params["customer"] = customer_id
+    try:
+        session = _stripe().checkout.Session.create(
+            **params,
+            idempotency_key=f"ec-pulse-checkout-{checkout_key}",
+        )
+    except Exception:
+        with psycopg.connect(_db_url()) as conn:
+            _init_billing(conn)
+            conn.execute(
+                "UPDATE api_accounts SET checkout_pending_key=NULL, checkout_pending_until=NULL, updated_at=%s WHERE api_key_hash=%s AND checkout_pending_key=%s",
+                (datetime.now(timezone.utc), account_hash, checkout_key),
+            )
+            conn.commit()
+        raise
     return session.url
