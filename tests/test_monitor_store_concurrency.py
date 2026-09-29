@@ -129,3 +129,67 @@ def test_create_monitor_with_credit_rolls_back_charge_when_insert_fails(monkeypa
     assert conn.committed is False
     assert any(x.startswith("UPDATE api_accounts SET credits_balance") for x in conn.statements)
     assert any(x.startswith("INSERT INTO monitors") for x in conn.statements)
+
+
+def test_monitor_reads_are_account_scoped_across_api_keys(monkeypatch):
+    from app.services.monitor_store import _account_hash
+
+    key1 = "ecp_live_account-key-1"
+    key2 = "ecp_live_account-key-2"
+    account_hash = "shared-account-hash"
+    monitor_row = (
+        "monitor-1",
+        "https://example.com/product",
+        60,
+        "https://example.com/webhook",
+        99.0,
+        None,
+        __import__("datetime").datetime(2026, 9, 29),
+    )
+
+    class Cursor:
+        def __init__(self, rows=None, row=None):
+            self.rows = rows or []
+            self.row = row
+
+        def fetchall(self):
+            return self.rows
+
+        def fetchone(self):
+            return self.row
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(sql.split())
+            if normalized.startswith("SELECT m.id, m.url, m.interval_minutes"):
+                assert "JOIN api_keys k ON k.account_key_hash = m.owner_key_hash" in normalized
+                assert "k.api_key_hash = %s AND k.active = TRUE" in normalized
+                assert params[0] in {_account_hash(key1), _account_hash(key2)}
+                return Cursor(rows=[monitor_row])
+            if normalized.startswith("SELECT m.id, m.url, m.last_price"):
+                assert "JOIN api_keys k ON k.account_key_hash = m.owner_key_hash" in normalized
+                assert "k.api_key_hash = %s AND k.active = TRUE" in normalized
+                assert params[1] in {_account_hash(key1), _account_hash(key2)}
+                return Cursor(row=monitor_row[:4])
+            raise AssertionError(normalized)
+
+    conn = Conn()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
+    monkeypatch.setattr(monitor_store.psycopg, "connect", lambda *_args, **_kwargs: conn)
+    monkeypatch.setattr(monitor_store, "_SCHEMA_READY", True)
+
+    listed_by_key1 = monitor_store.list_monitors(key1)
+    listed_by_key2 = monitor_store.list_monitors(key2)
+    owned_by_key1 = monitor_store._owned_monitor(conn, key1, "monitor-1")
+    owned_by_key2 = monitor_store._owned_monitor(conn, key2, "monitor-1")
+
+    assert listed_by_key1[0]["id"] == "monitor-1"
+    assert listed_by_key2[0]["id"] == "monitor-1"
+    assert owned_by_key1[0] == "monitor-1"
+    assert owned_by_key2[0] == "monitor-1"
