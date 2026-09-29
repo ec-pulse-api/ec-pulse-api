@@ -1,7 +1,7 @@
 import asyncio
 import os
 import re
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -263,11 +263,13 @@ def _links(html: str, marketplace: str) -> list[str]:
             else:
                 continue
         elif marketplace == "rakuten":
-            if "item.rakuten.co.jp/" not in href:
+            parsed = urlparse(href)
+            if parsed.scheme not in {"http", "https"} or parsed.hostname != "item.rakuten.co.jp":
                 continue
             url = href.split("?")[0]
         else:
-            if "shopping.yahoo.co.jp/" not in href:
+            parsed = urlparse(href)
+            if parsed.scheme not in {"http", "https"} or parsed.hostname != "shopping.yahoo.co.jp":
                 continue
             url = href.split("?")[0]
 
