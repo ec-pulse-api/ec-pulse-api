@@ -116,10 +116,15 @@ def process_webhook(payload: bytes, signature: str) -> dict:
                 if subscription_id:
                     try:
                         subscription = sdk.Subscription.retrieve(subscription_id)
-                    except Exception:
-                        subscription = None
-                    if subscription:
-                        handled = _apply_subscription(conn, subscription.to_dict_recursive(), event_data.get("created")) or handled
+                    except Exception as exc:
+                        # Do not acknowledge a transient Stripe API failure.
+                        # Rolling back lets Stripe retry the webhook later.
+                        raise RuntimeError("Unable to retrieve Stripe subscription") from exc
+                    handled = _apply_subscription(
+                        conn,
+                        subscription.to_dict_recursive(),
+                        event_data.get("created"),
+                    ) or handled
         conn.commit()
     return {"ok": True, "duplicate": False, "event_id": event_id, "type": event_type, "handled": handled}
 
