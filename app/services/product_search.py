@@ -7,6 +7,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.services.product_cache import fetch_product_cached
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, validate_public_url
 
 
 SEARCH_URLS = {
@@ -16,6 +17,9 @@ SEARCH_URLS = {
 }
 
 YAHOO_SEARCH_URL = "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
+_YAHOO_REQUEST_LOCK = asyncio.Lock()
+_YAHOO_MIN_INTERVAL_SECONDS = 1.05
+_yahoo_last_request_at = 0.0
 
 
 def _links(html: str, marketplace: str) -> list[str]:
@@ -105,10 +109,26 @@ async def _search_yahoo_api(query: str, limit: int) -> list[dict]:
         "sort": "+price",
         "in_stock": "true",
     }
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(YAHOO_SEARCH_URL, params=params)
-        response.raise_for_status()
-        payload = response.json()
+    global _yahoo_last_request_at
+    async with _YAHOO_REQUEST_LOCK:
+        now = asyncio.get_running_loop().time()
+        wait = _YAHOO_MIN_INTERVAL_SECONDS - (now - _yahoo_last_request_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(YAHOO_SEARCH_URL, params=params)
+            _yahoo_last_request_at = asyncio.get_running_loop().time()
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    delay = min(float(retry_after), 5.0) if retry_after else 1.1
+                except ValueError:
+                    delay = 1.1
+                await asyncio.sleep(delay)
+                response = await client.get(YAHOO_SEARCH_URL, params=params)
+                _yahoo_last_request_at = asyncio.get_running_loop().time()
+            response.raise_for_status()
+            payload = response.json()
 
     return [
         {
@@ -123,13 +143,24 @@ async def _search_yahoo_api(query: str, limit: int) -> list[dict]:
 
 async def _search_marketplace(marketplace: str, query: str, limit: int) -> list[str]:
     url = SEARCH_URLS[marketplace].format(query=quote_plus(query))
+    current_url = await validate_public_url(url)
     async with httpx.AsyncClient(
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=15.0,
         headers={"User-Agent": "EC-Pulse/0.1 (+https://ec-pulse-api.vercel.app)"},
     ) as client:
-        response = await client.get(url)
-        response.raise_for_status()
+        for _ in range(MAX_REDIRECTS + 1):
+            response = await client.get(current_url)
+            if response.is_redirect or response.is_permanent_redirect:
+                location = response.headers.get("location")
+                if not location:
+                    raise ValueError("Redirect response did not include a location")
+                current_url = await validate_public_url(next_redirect(current_url, location))
+                continue
+            response.raise_for_status()
+            break
+        else:
+            raise ValueError("Too many redirects")
     return _links(response.text, marketplace)[:limit]
 
 
