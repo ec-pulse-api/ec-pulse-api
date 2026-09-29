@@ -24,6 +24,8 @@ class FakeConnection:
     def execute(self, sql, params=()):
         sql = " ".join(sql.split())
         assert sql.startswith("INSERT INTO api_rate_limits")
+        assert "ON CONFLICT (api_key_hash) DO UPDATE" in sql
+        assert "LEAST(api_rate_limits.request_count + 1, %s)" in sql
         current_window = params[1]
         limit_plus_one = params[2]
         if self.row is None or self.row[0] != current_window:
@@ -67,3 +69,17 @@ def test_rate_limit_resets_on_new_window(monkeypatch):
     reset = rate_limit.check_rate_limit("hash", "free")
     assert reset["allowed"] is True
     assert reset["remaining"] == 29
+
+
+def test_plan_rate_limit_boundaries(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
+
+    for plan, limit in (("pro", 300), ("business", 3000)):
+        fake_conn = FakeConnection()
+        monkeypatch.setattr(rate_limit.psycopg, "connect", lambda *_args, _conn=fake_conn, **_kwargs: _conn)
+        for _ in range(limit):
+            assert rate_limit.check_rate_limit(f"{plan}-hash", plan)["allowed"] is True
+        blocked = rate_limit.check_rate_limit(f"{plan}-hash", plan)
+        assert blocked["allowed"] is False
+        assert blocked["remaining"] == 0
+        assert blocked["limit"] == limit
