@@ -65,6 +65,51 @@ def _key(url: str) -> str:
     return sha256(url.strip().encode()).hexdigest()
 
 
+def _write_cached_payload(conn, cache_key: str, url: str, payload: dict, captured_at: datetime, expires_at: datetime, lock_token: str) -> None:
+    cursor = conn.execute(
+        """
+        WITH lease AS (
+            SELECT 1
+            FROM product_cache_locks
+            WHERE cache_key = %s
+              AND lock_token = %s
+              AND locked_until > clock_timestamp()
+            FOR UPDATE
+        )
+        INSERT INTO product_cache (
+            cache_key, url, payload, captured_at, expires_at
+        )
+        SELECT %s, %s, %s::jsonb, %s, %s
+        FROM lease
+        ON CONFLICT (cache_key) DO UPDATE SET
+            url = EXCLUDED.url,
+            payload = EXCLUDED.payload,
+            captured_at = EXCLUDED.captured_at,
+            expires_at = EXCLUDED.expires_at
+        WHERE EXISTS (
+            SELECT 1
+            FROM product_cache_locks
+            WHERE cache_key = %s
+              AND lock_token = %s
+              AND locked_until > clock_timestamp()
+        )
+        """,
+        (
+            cache_key,
+            lock_token,
+            cache_key,
+            url,
+            json.dumps(payload),
+            captured_at,
+            expires_at,
+            cache_key,
+            lock_token,
+        ),
+    )
+    if cursor.rowcount != 1:
+        raise TimeoutError("Product cache refresh lease expired")
+
+
 async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, bool]:
     if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or not 1 <= ttl_seconds <= 86400:
         raise ValueError("ttl_seconds must be between 1 and 86400")
@@ -124,48 +169,15 @@ async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, 
         captured_at = datetime.now(timezone.utc)
         expires_at = captured_at + timedelta(seconds=ttl_seconds)
         with psycopg.connect(_db_url()) as conn:
-            cursor = conn.execute(
-                """
-                WITH lease AS (
-                    SELECT 1
-                    FROM product_cache_locks
-                    WHERE cache_key = %s
-                      AND lock_token = %s
-                      AND locked_until > clock_timestamp()
-                    FOR UPDATE
-                )
-                INSERT INTO product_cache (
-                    cache_key, url, payload, captured_at, expires_at
-                )
-                SELECT %s, %s, %s::jsonb, %s, %s
-                FROM lease
-                ON CONFLICT (cache_key) DO UPDATE SET
-                    url = EXCLUDED.url,
-                    payload = EXCLUDED.payload,
-                    captured_at = EXCLUDED.captured_at,
-                    expires_at = EXCLUDED.expires_at
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM product_cache_locks
-                    WHERE cache_key = %s
-                      AND lock_token = %s
-                      AND locked_until > clock_timestamp()
-                )
-                """,
-                (
-                    cache_key,
-                    lock_token,
-                    cache_key,
-                    url,
-                    json.dumps(payload),
-                    captured_at,
-                    expires_at,
-                    cache_key,
-                    lock_token,
-                ),
+            _write_cached_payload(
+                conn,
+                cache_key,
+                url,
+                payload,
+                captured_at,
+                expires_at,
+                lock_token,
             )
-            if cursor.rowcount != 1:
-                raise TimeoutError("Product cache refresh lease expired")
             conn.commit()
         return payload, False
     finally:
