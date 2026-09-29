@@ -31,6 +31,7 @@ def _init_billing(conn):
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMPTZ")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS last_stripe_event_created BIGINT")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS last_stripe_event_id TEXT")
+    conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS stripe_subscription_created_at BIGINT")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS checkout_pending_key TEXT")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS checkout_pending_until TIMESTAMPTZ")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_accounts_stripe_customer ON api_accounts (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL")
@@ -76,14 +77,15 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
     event_id = subscription.get("_ec_pulse_event_id")
     state = conn.execute(
         """SELECT stripe_subscription_id, subscription_status,
-                  last_stripe_event_created, last_stripe_event_id
+                  last_stripe_event_created, last_stripe_event_id,
+                  stripe_subscription_created_at
            FROM api_accounts
            WHERE api_key_hash = %s
            FOR UPDATE""",
         (row[0],),
     ).fetchone()
     if event_created is not None and state:
-        previous_subscription_id, previous_status, previous_created, _previous_event_id = state
+        previous_subscription_id, previous_status, previous_created, _previous_event_id, previous_subscription_created_at = state
         if previous_created is not None and event_created < previous_created:
             return False
         # A customer can have more than one Stripe subscription. Once this
@@ -100,6 +102,16 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
             and status not in active_statuses
         ):
             return False
+        subscription_created_at = subscription.get("created")
+        if (
+            previous_subscription_id
+            and subscription_id
+            and subscription_id != previous_subscription_id
+            and previous_subscription_created_at is not None
+            and subscription_created_at is not None
+            and subscription_created_at <= previous_subscription_created_at
+        ):
+            return False
         if (
             previous_subscription_id
             and subscription_id
@@ -112,7 +124,7 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
     effective_plan = plan if status in {"active", "trialing", "past_due"} else None
     if effective_plan:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
-            current_period_start=%s, current_period_end=%s, cancel_at_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), bool(subscription.get("cancel_at_period_end", False)), event_created, event_id, datetime.now(timezone.utc), row[0]))
+            current_period_start=%s, current_period_end=%s, cancel_at_period_end=%s, stripe_subscription_created_at=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), bool(subscription.get("cancel_at_period_end", False)), subscription.get("created"), event_created, event_id, datetime.now(timezone.utc), row[0]))
     else:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
             current_period_start=%s, current_period_end=%s, cancel_at_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan or "free", subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), bool(subscription.get("cancel_at_period_end", False)), event_created, event_id, datetime.now(timezone.utc), row[0]))
