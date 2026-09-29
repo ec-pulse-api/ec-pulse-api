@@ -258,9 +258,6 @@ def research_runs(
 
 @app.get("/v1/research/runs/{run_id}/opportunity")
 async def research_opportunity(run_id: str, request_http: Request, response: Response, api_key: str = Depends(get_api_key)):
-    charge = _charge(api_key, "GET /v1/research/runs/{run_id}/opportunity", 1)
-    for k, v in _usage_headers(request_http, api_key, charge).items():
-        response.headers[k] = v
     try:
         result = get_research_opportunity(api_key, run_id)
         queries = []
@@ -275,6 +272,9 @@ async def research_opportunity(run_id: str, request_http: Request, response: Res
                     candidates.extend(found.get("results", found.get("items", [])))
             except Exception:
                 continue
+        charge = _charge(api_key, "GET /v1/research/runs/{run_id}/opportunity", 1)
+        for k, v in _usage_headers(request_http, api_key, charge).items():
+            response.headers[k] = v
         result["product_candidates"] = candidates[:15]
         result["credits"] = charge
         return result
@@ -342,16 +342,22 @@ def monitors(api_key:str=Depends(get_api_key)):
 @app.get("/v1/monitors/{monitor_id}/history")
 def monitor_history(monitor_id:str,limit:int=100,api_key:str=Depends(get_api_key)):
     if not 1<=limit<=1000: raise HTTPException(status_code=400,detail="limit must be between 1 and 1000")
-    _charge(api_key,"GET /v1/monitors/{monitor_id}/history")
-    try: return get_price_history(api_key,monitor_id,limit)
+    try:
+        result = get_price_history(api_key,monitor_id,limit)
+        charge = _charge(api_key,"GET /v1/monitors/{monitor_id}/history")
+        result["credits"] = charge
+        return result
     except KeyError as exc: raise HTTPException(status_code=404,detail="Monitor not found") from exc
     except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
 
 @app.get("/v1/monitors/{monitor_id}/opportunity")
 def monitor_opportunity(monitor_id:str,limit:int=100,api_key:str=Depends(get_api_key)):
     if not 2<=limit<=1000: raise HTTPException(status_code=400,detail="limit must be between 2 and 1000")
-    _charge(api_key,"GET /v1/monitors/{monitor_id}/opportunity",2)
-    try: return get_price_opportunity(api_key,monitor_id,limit)
+    try:
+        result = get_price_opportunity(api_key,monitor_id,limit)
+        charge = _charge(api_key,"GET /v1/monitors/{monitor_id}/opportunity",2)
+        result["credits"] = charge
+        return result
     except KeyError as exc: raise HTTPException(status_code=404,detail="Monitor not found") from exc
     except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
 
