@@ -24,7 +24,7 @@ EC Pulse turns Japanese marketplace product pages and search results into normal
 | Pro | configurable | 300 req/min |
 | Business | configurable | 3000 req/min |
 
-The plan values are currently enforced in the API layer; commercial billing and automatic plan changes are the next layer.
+Plan limits, Stripe checkout, subscription synchronization, credit accounting, and usage tracking are implemented; the remaining commercial layer is self-service key management and customer-facing dashboard/docs.
 
 ## Core endpoints
 
@@ -38,7 +38,12 @@ The plan values are currently enforced in the API layer; commercial billing and 
 - `GET /v1/monitors/{id}/opportunity`
 - `GET /v1/account`
 - `POST /v1/research/ingest`
+- `GET /v1/research/runs`
 - `GET /v1/research/runs/{run_id}/opportunity`
+- `POST /v1/consumer-insights/analyze`
+- `POST /v1/billing/checkout`
+- `POST /v1/billing/portal`
+- `POST /api/stripe/webhook`
 
 ## Authentication
 
@@ -83,10 +88,8 @@ PostgreSQL
 
 ## Next commercial layer
 
-1. Stripe customer/subscription mapping
-2. Automatic monthly credit grants
-3. Paid-plan checkout
-4. Customer dashboard
-5. API key self-service
-6. Public API documentation
-7. TRACER integration
+1. Automatic monthly credit grants / top-ups
+2. Customer dashboard
+3. API key self-service
+4. Public API documentation
+5. TRACER integration
