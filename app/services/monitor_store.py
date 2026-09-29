@@ -2,12 +2,16 @@ import hashlib
 import os
 import secrets
 import uuid
+from threading import Lock
 from datetime import datetime, timezone
 
 import httpx
 import psycopg
 
 from app.services.url_safety import validate_public_url
+
+_INIT_LOCK = Lock()
+_SCHEMA_READY = False
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS monitors (
@@ -104,19 +108,26 @@ def _account_hash(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()
 
 def _init(conn):
-    conn.execute(SCHEMA)
-    # Safe migration for the existing monitor table.
-    conn.execute("ALTER TABLE monitors ADD COLUMN IF NOT EXISTS owner_key_hash TEXT")
-    master_key = os.getenv("EC_PULSE_API_KEY")
-    if master_key:
-        key_hash = _account_hash(master_key)
-        now = datetime.now(timezone.utc)
-        conn.execute("""INSERT INTO api_accounts (api_key_hash, plan, credits_balance, created_at, updated_at)
-            VALUES (%s, 'free', 100, %s, %s) ON CONFLICT (api_key_hash) DO NOTHING""", (key_hash, now, now))
-        conn.execute("""INSERT INTO api_keys (api_key_hash, key_prefix, account_key_hash, active, created_at)
-            VALUES (%s, %s, %s, TRUE, %s) ON CONFLICT (api_key_hash) DO NOTHING""", (key_hash, master_key[:12], key_hash, now))
-        conn.execute("UPDATE monitors SET owner_key_hash = %s WHERE owner_key_hash IS NULL", (key_hash,))
-    conn.commit()
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+    with _INIT_LOCK:
+        if _SCHEMA_READY:
+            return
+        conn.execute(SCHEMA)
+        # Safe migration for the existing monitor table.
+        conn.execute("ALTER TABLE monitors ADD COLUMN IF NOT EXISTS owner_key_hash TEXT")
+        master_key = os.getenv("EC_PULSE_API_KEY")
+        if master_key:
+            key_hash = _account_hash(master_key)
+            now = datetime.now(timezone.utc)
+            conn.execute("""INSERT INTO api_accounts (api_key_hash, plan, credits_balance, created_at, updated_at)
+                VALUES (%s, 'free', 100, %s, %s) ON CONFLICT (api_key_hash) DO NOTHING""", (key_hash, now, now))
+            conn.execute("""INSERT INTO api_keys (api_key_hash, key_prefix, account_key_hash, active, created_at)
+                VALUES (%s, %s, %s, TRUE, %s) ON CONFLICT (api_key_hash) DO NOTHING""", (key_hash, master_key[:12], key_hash, now))
+            conn.execute("UPDATE monitors SET owner_key_hash = %s WHERE owner_key_hash IS NULL", (key_hash,))
+        conn.commit()
+        _SCHEMA_READY = True
 
 def validate_api_key(api_key: str) -> bool:
     key_hash = _account_hash(api_key)
