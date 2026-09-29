@@ -124,18 +124,48 @@ async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, 
         captured_at = datetime.now(timezone.utc)
         expires_at = captured_at + timedelta(seconds=ttl_seconds)
         with psycopg.connect(_db_url()) as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
-                INSERT INTO product_cache (cache_key, url, payload, captured_at, expires_at)
-                VALUES (%s, %s, %s::jsonb, %s, %s)
+                WITH lease AS (
+                    SELECT 1
+                    FROM product_cache_locks
+                    WHERE cache_key = %s
+                      AND lock_token = %s
+                      AND locked_until > clock_timestamp()
+                    FOR UPDATE
+                )
+                INSERT INTO product_cache (
+                    cache_key, url, payload, captured_at, expires_at
+                )
+                SELECT %s, %s, %s::jsonb, %s, %s
+                FROM lease
                 ON CONFLICT (cache_key) DO UPDATE SET
                     url = EXCLUDED.url,
                     payload = EXCLUDED.payload,
                     captured_at = EXCLUDED.captured_at,
                     expires_at = EXCLUDED.expires_at
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM product_cache_locks
+                    WHERE cache_key = %s
+                      AND lock_token = %s
+                      AND locked_until > clock_timestamp()
+                )
                 """,
-                (cache_key, url, json.dumps(payload), captured_at, expires_at),
+                (
+                    cache_key,
+                    lock_token,
+                    cache_key,
+                    url,
+                    json.dumps(payload),
+                    captured_at,
+                    expires_at,
+                    cache_key,
+                    lock_token,
+                ),
             )
+            if cursor.rowcount != 1:
+                raise TimeoutError("Product cache refresh lease expired")
             conn.commit()
         return payload, False
     finally:
