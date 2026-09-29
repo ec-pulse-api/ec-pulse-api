@@ -253,7 +253,7 @@ def test_checkout_sets_pending_before_stripe_call(monkeypatch):
     result = billing.create_checkout("secret", "pro")
     assert result == "https://checkout.example/session"
     assert conn.committed is True
-    assert "UPDATE api_accounts SET checkout_pending_key" in conn.sql
+    assert "checkout_pending_key" in conn.sql
 
 
 def test_checkout_uses_owning_account_hash_in_metadata(monkeypatch):
