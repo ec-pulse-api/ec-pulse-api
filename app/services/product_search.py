@@ -30,7 +30,7 @@ def _links(html: str, marketplace: str) -> list[str]:
     for anchor in soup.find_all("a", href=True):
         href = str(anchor["href"])
         if marketplace == "amazon":
-            match = re.search(r"(https?://www\.amazon\.co\.jp)?/[^\s"']*/dp/([A-Z0-9]{10})", href, re.I)
+            match = re.search(r"(https?://www\.amazon\.co\.jp)?/[^\s\"']*/dp/([A-Z0-9]{10})", href, re.I)
             if match:
                 url = f"https://www.amazon.co.jp/dp/{match.group(2).upper()}"
             else:
