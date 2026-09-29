@@ -158,7 +158,20 @@ def process_webhook(payload: bytes, signature: str) -> dict:
             return {"ok": True, "duplicate": True, "event_id": event_id}
         obj = event_data.get("data", {}).get("object", {})
         handled = False
-        if event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
+        subscription_event_types = {
+            "customer.subscription.created",
+            "customer.subscription.updated",
+            "customer.subscription.deleted",
+            "customer.subscription.paused",
+            "customer.subscription.resumed",
+        }
+        invoice_sync_types = {
+            "invoice.paid",
+            "invoice.payment_succeeded",
+            "invoice.payment_failed",
+            "invoice.payment_action_required",
+        }
+        if event_type in subscription_event_types:
             subscription_id = obj.get("id")
             current = obj
             if subscription_id:
@@ -169,6 +182,15 @@ def process_webhook(payload: bytes, signature: str) -> dict:
                         raise RuntimeError("Unable to retrieve Stripe subscription") from exc
             current = {**current, "_ec_pulse_event_id": event_id}
             handled = _apply_subscription(conn, current, event_data.get("created"))
+        elif event_type in invoice_sync_types:
+            subscription_id = obj.get("subscription")
+            if subscription_id:
+                try:
+                    current = sdk.Subscription.retrieve(subscription_id).to_dict_recursive()
+                except Exception as exc:
+                    raise RuntimeError("Unable to retrieve Stripe subscription") from exc
+                current = {**current, "_ec_pulse_event_id": event_id}
+                handled = _apply_subscription(conn, current, event_data.get("created"))
         elif event_type == "checkout.session.completed":
             customer_id = obj.get("customer")
             metadata = obj.get("metadata") or {}
