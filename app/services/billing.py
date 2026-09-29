@@ -34,6 +34,7 @@ def _init_billing(conn):
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS stripe_subscription_created_at BIGINT")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS checkout_pending_key TEXT")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS checkout_pending_until TIMESTAMPTZ")
+    conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS checkout_session_id TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_accounts_stripe_customer ON api_accounts (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_accounts_stripe_subscription ON api_accounts (stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL")
     conn.commit()
@@ -291,7 +292,8 @@ def create_checkout(api_key: str, plan: str) -> str:
         key_hash = _account_hash(api_key)
         row = conn.execute(
             """SELECT a.api_key_hash, a.stripe_customer_id, a.stripe_subscription_id,
-                      a.subscription_status, a.checkout_pending_key, a.checkout_pending_until
+                      a.subscription_status, a.checkout_pending_key, a.checkout_pending_until,
+                      a.checkout_session_id
                FROM api_keys k
                JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
                WHERE k.api_key_hash=%s AND k.active=TRUE
@@ -303,10 +305,28 @@ def create_checkout(api_key: str, plan: str) -> str:
         if row and row[2] and row[3] in {"active", "trialing", "past_due"}:
             raise ValueError("An active Stripe subscription is already linked to this account")
         now = datetime.now(timezone.utc)
-        if row and row[4] and row[5] and row[5] > now:
-            raise ValueError("A Stripe checkout is already in progress for this account")
         if not row:
             raise ValueError("Invalid or revoked API key")
+        if row[4] and row[5]:
+            if row[5] > now:
+                raise ValueError("A Stripe checkout is already in progress for this account")
+            old_session_id = row[6]
+            if old_session_id:
+                try:
+                    old_session = _stripe().checkout.Session.retrieve(old_session_id)
+                    old_status = old_session.get("status") if hasattr(old_session, "get") else getattr(old_session, "status", None)
+                    if old_status == "complete":
+                        raise RuntimeError("Previous Stripe checkout completed; waiting for webhook")
+                    if old_status == "open":
+                        _stripe().checkout.Session.expire(old_session_id)
+                except RuntimeError:
+                    raise
+                except Exception as exc:
+                    raise RuntimeError("Unable to reconcile expired Stripe checkout") from exc
+            conn.execute(
+                "UPDATE api_accounts SET checkout_pending_key=NULL, checkout_pending_until=NULL, checkout_session_id=NULL, updated_at=%s WHERE api_key_hash=%s",
+                (now, account_hash),
+            )
         checkout_key = str(uuid.uuid4())
         pending_until = now + timedelta(minutes=10)
         conn.execute(
@@ -323,11 +343,26 @@ def create_checkout(api_key: str, plan: str) -> str:
             **params,
             idempotency_key=f"ec-pulse-checkout-{checkout_key}",
         )
-    except Exception:
+        session_id = session.get("id") if hasattr(session, "get") else getattr(session, "id", None)
+        if not session_id:
+            raise RuntimeError("Stripe checkout did not return a session id")
         with psycopg.connect(_db_url()) as conn:
             _init_billing(conn)
             conn.execute(
-                "UPDATE api_accounts SET checkout_pending_key=NULL, checkout_pending_until=NULL, updated_at=%s WHERE api_key_hash=%s AND checkout_pending_key=%s",
+                "UPDATE api_accounts SET checkout_session_id=%s, updated_at=%s WHERE api_key_hash=%s AND checkout_pending_key=%s",
+                (session_id, datetime.now(timezone.utc), account_hash, checkout_key),
+            )
+            conn.commit()
+    except Exception:
+        try:
+            if "session_id" in locals() and session_id:
+                _stripe().checkout.Session.expire(session_id)
+        except Exception:
+            pass
+        with psycopg.connect(_db_url()) as conn:
+            _init_billing(conn)
+            conn.execute(
+                "UPDATE api_accounts SET checkout_pending_key=NULL, checkout_pending_until=NULL, checkout_session_id=NULL, updated_at=%s WHERE api_key_hash=%s AND checkout_pending_key=%s",
                 (datetime.now(timezone.utc), account_hash, checkout_key),
             )
             conn.commit()
