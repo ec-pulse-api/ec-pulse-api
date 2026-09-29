@@ -243,20 +243,22 @@ def create_checkout(api_key: str, plan: str) -> str:
     from app.services.monitor_store import _account_hash
     with psycopg.connect(_db_url()) as conn:
         _init_billing(conn)
-        account_hash = _account_hash(api_key)
+        key_hash = _account_hash(api_key)
         row = conn.execute(
-            """SELECT stripe_customer_id, stripe_subscription_id, subscription_status,
-                      checkout_pending_key, checkout_pending_until
-               FROM api_accounts
-               WHERE api_key_hash=%s
-               FOR UPDATE""",
-            (account_hash,),
+            """SELECT a.api_key_hash, a.stripe_customer_id, a.stripe_subscription_id,
+                      a.subscription_status, a.checkout_pending_key, a.checkout_pending_until
+               FROM api_keys k
+               JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+               WHERE k.api_key_hash=%s AND k.active=TRUE
+               FOR UPDATE OF a""",
+            (key_hash,),
         ).fetchone()
-        customer_id = row[0] if row else None
-        if row and row[1] and row[2] in {"active", "trialing", "past_due"}:
+        account_hash = row[0] if row else None
+        customer_id = row[1] if row else None
+        if row and row[2] and row[3] in {"active", "trialing", "past_due"}:
             raise ValueError("An active Stripe subscription is already linked to this account")
         now = datetime.now(timezone.utc)
-        if row and row[3] and row[4] and row[4] > now:
+        if row and row[4] and row[5] and row[5] > now:
             raise ValueError("A Stripe checkout is already in progress for this account")
         checkout_key = str(uuid.uuid4())
         pending_until = now + timedelta(minutes=10)
