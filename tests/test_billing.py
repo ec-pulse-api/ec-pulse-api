@@ -170,7 +170,7 @@ def test_checkout_rejects_existing_active_subscription(monkeypatch):
 
     class Cursor:
         def fetchone(self):
-            return ("account-hash", "cus_123", "sub_123", "active")
+            return ("account-hash", "cus_123", "sub_123", "active", None, None)
 
     class Conn:
         def execute(self, sql, params=()):
@@ -198,12 +198,12 @@ def test_checkout_rejects_existing_active_subscription(monkeypatch):
         raise AssertionError("expected ValueError")
 
 
-def test_checkout_holds_account_lock_through_stripe_call(monkeypatch):
+def test_checkout_sets_pending_before_stripe_call(monkeypatch):
     import app.services.billing as billing
 
     class Cursor:
         def fetchone(self):
-            return ("account-hash", None, None, None)
+            return ("account-hash", None, None, None, None, None)
 
     class Conn:
         def __init__(self):
@@ -226,8 +226,7 @@ def test_checkout_holds_account_lock_through_stripe_call(monkeypatch):
     class Checkout:
         @staticmethod
         def create(**kwargs):
-            assert conn.closed is False
-            assert conn.committed is False
+            assert conn.committed is True
             return type("Session", (), {"url": "https://checkout.example/session"})()
 
     class FakeStripe:
