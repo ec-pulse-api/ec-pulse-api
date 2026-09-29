@@ -127,11 +127,20 @@ def process_webhook(payload: bytes, signature: str) -> dict:
             handled = _apply_subscription(conn, current, event_data.get("created"))
         elif event_type == "checkout.session.completed":
             customer_id = obj.get("customer")
-            api_key_hash = (obj.get("metadata") or {}).get("api_key_hash")
-            if customer_id and api_key_hash:
+            metadata = obj.get("metadata") or {}
+            api_key_hash = metadata.get("api_key_hash")
+            checkout_key = metadata.get("checkout_pending_key")
+            if customer_id and api_key_hash and checkout_key:
+                pending = conn.execute(
+                    "SELECT checkout_pending_key FROM api_accounts WHERE api_key_hash=%s FOR UPDATE",
+                    (api_key_hash,),
+                ).fetchone()
+                if not pending or pending[0] != checkout_key:
+                    # A stale Checkout Session must not consume or clear a newer pending checkout.
+                    return {"ok": True, "duplicate": False, "event_id": event_id, "type": event_type, "handled": False}
                 conn.execute(
-                    "UPDATE api_accounts SET stripe_customer_id=%s, checkout_pending_key=NULL, checkout_pending_until=NULL, updated_at=%s WHERE api_key_hash=%s",
-                    (customer_id, now, api_key_hash),
+                    "UPDATE api_accounts SET stripe_customer_id=%s, checkout_pending_key=NULL, checkout_pending_until=NULL, updated_at=%s WHERE api_key_hash=%s AND checkout_pending_key=%s",
+                    (customer_id, now, api_key_hash, checkout_key),
                 )
                 handled = True
                 subscription_id = obj.get("subscription")
@@ -270,7 +279,7 @@ def create_checkout(api_key: str, plan: str) -> str:
         )
         conn.commit()
 
-    params = {"mode": "subscription", "line_items": [{"price": price_id, "quantity": 1}], "success_url": f"{base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}", "cancel_url": f"{base_url}/billing/cancel", "metadata": {"api_key_hash": account_hash, "plan": plan}}
+    params = {"mode": "subscription", "line_items": [{"price": price_id, "quantity": 1}], "success_url": f"{base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}", "cancel_url": f"{base_url}/billing/cancel", "metadata": {"api_key_hash": account_hash, "checkout_pending_key": checkout_key, "plan": plan}}
     if customer_id:
         params["customer"] = customer_id
     try:
