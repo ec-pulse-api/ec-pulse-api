@@ -10,7 +10,7 @@ class FakeCursor:
 
 
 class FakeConn:
-    def __init__(self, state=(None, None, None, None)):
+    def __init__(self, state=(None, None, None, None, None)):
         self.updates = 0
         self.last_params = None
         self.state = state
@@ -82,14 +82,14 @@ def test_event_id_does_not_act_as_fake_ordering(monkeypatch):
 
 def test_older_event_created_is_ignored(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
-    conn = FakeConn(("sub_123", "active", 200, "evt_002"))
+    conn = FakeConn(("sub_123", "active", 200, "evt_002", 150))
     assert _apply_subscription(conn, _subscription("active"), 100) is False
     assert conn.updates == 0
 
 
 def test_same_timestamp_does_not_compare_ids(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
-    conn = FakeConn(("sub_123", "active", 100, "evt_002"))
+    conn = FakeConn(("sub_123", "active", 100, "evt_002", 50))
     assert _apply_subscription(conn, _subscription("active", "evt_001"), 100) is True
     assert conn.updates == 1
 
@@ -378,7 +378,7 @@ def test_stale_checkout_completion_cannot_clear_new_pending_checkout(monkeypatch
 
 def test_stale_terminal_event_from_old_subscription_cannot_replace_new_active_subscription(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
-    conn = FakeConn(("sub_new", "active", 300, "evt_new"))
+    conn = FakeConn(("sub_new", "active", 300, "evt_new", 300))
     old_subscription = _subscription("canceled", "evt_old")
     old_subscription["id"] = "sub_old"
     assert _apply_subscription(conn, old_subscription, 301) is False
@@ -394,9 +394,20 @@ def test_equal_timestamp_old_subscription_cannot_replace_new_active_subscription
     assert conn.updates == 0
 
 
+
+def test_older_subscription_cannot_replace_newer_active_subscription_even_with_later_event_timestamp(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    conn = FakeConn(("sub_new", "active", 300, "evt_new", 500))
+    old_subscription = _subscription("active", "evt_old")
+    old_subscription["id"] = "sub_old"
+    old_subscription["created"] = 400
+    assert _apply_subscription(conn, old_subscription, 400) is False
+    assert conn.updates == 0
+
+
 def test_new_subscription_can_replace_terminal_previous_subscription(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
-    conn = FakeConn(("sub_old", "canceled", 300, "evt_old"))
+    conn = FakeConn(("sub_old", "canceled", 300, "evt_old", 200))
     new_subscription = _subscription("active", "evt_new")
     new_subscription["id"] = "sub_new"
     assert _apply_subscription(conn, new_subscription, 300) is True
