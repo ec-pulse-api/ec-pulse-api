@@ -148,6 +148,16 @@ async def _search_amazon_official(query: str, limit: int) -> list[dict]:
         if response.status_code == 401:
             _amazon_access_token = None
             _amazon_token_expires_at = 0.0
+            token = await _amazon_token()
+            response = await client.post(
+                AMAZON_API_URL,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "x-marketplace": "www.amazon.co.jp",
+                },
+                json=payload,
+            )
         response.raise_for_status()
         if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
             raise ValueError("Amazon API response is too large")
