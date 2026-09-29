@@ -55,23 +55,28 @@ def _key(url: str) -> str:
 
 
 async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, bool]:
+    if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or not 1 <= ttl_seconds <= 86400:
+        raise ValueError("ttl_seconds must be between 1 and 86400")
     now = datetime.now(timezone.utc)
     cache_key = _key(url)
     _ensure_initialized()
 
-    with psycopg.connect(_db_url()) as conn:
+    # Session-level advisory lock prevents a cold/stale-key thundering herd
+    # across concurrent serverless instances.
+    conn = psycopg.connect(_db_url())
+    try:
+        conn.execute("SELECT pg_advisory_lock(hashtext(%s))", (cache_key,))
         row = conn.execute(
             "SELECT payload FROM product_cache WHERE cache_key = %s AND expires_at > %s",
             (cache_key, now),
         ).fetchone()
         if row:
+            conn.execute("SELECT pg_advisory_unlock(hashtext(%s))", (cache_key,))
             return row[0], True
 
-    payload = await fetch_product(url)
-    captured_at = datetime.now(timezone.utc)
-    expires_at = captured_at + timedelta(seconds=ttl_seconds)
-
-    with psycopg.connect(_db_url()) as conn:
+        payload = await fetch_product(url)
+        captured_at = datetime.now(timezone.utc)
+        expires_at = captured_at + timedelta(seconds=ttl_seconds)
         conn.execute(
             """
             INSERT INTO product_cache (cache_key, url, payload, captured_at, expires_at)
@@ -85,4 +90,10 @@ async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, 
             (cache_key, url, json.dumps(payload), captured_at, expires_at),
         )
         conn.commit()
-    return payload, False
+        conn.execute("SELECT pg_advisory_unlock(hashtext(%s))", (cache_key,))
+        return payload, False
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
