@@ -163,3 +163,36 @@ def test_canceled_subscription_cannot_be_canceled_again(monkeypatch):
         assert "No active Stripe subscription" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_checkout_rejects_existing_active_subscription(monkeypatch):
+    import app.services.billing as billing
+
+    class Cursor:
+        def fetchone(self):
+            return ("cus_123", "sub_123", "active")
+
+    class Conn:
+        def execute(self, sql, params=()):
+            assert "FOR UPDATE" in sql
+            return Cursor()
+        def commit(self):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    monkeypatch.setenv("APP_BASE_URL", "https://example.com")
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: Conn())
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+    monkeypatch.setattr("app.services.monitor_store._account_hash", lambda key: "account-hash")
+
+    try:
+        billing.create_checkout("secret", "pro")
+    except ValueError as exc:
+        assert "active Stripe subscription" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
