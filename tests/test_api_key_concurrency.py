@@ -67,3 +67,44 @@ def test_ensure_api_account_resolves_owning_account(monkeypatch):
     result = monitor_store.ensure_api_account("ecp_live_shared-key")
     assert result["plan"] == "pro"
     assert result["credits_balance"] == 97
+
+
+
+def test_get_account_usage_aggregates_all_keys_on_owning_account(monkeypatch):
+    from datetime import datetime
+
+    class Cursor:
+        def __init__(self, row=None, rows=None):
+            self.row = row
+            self.rows = rows or []
+        def fetchone(self): return self.row
+        def fetchall(self): return self.rows
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, sql, params=()):
+            if "SELECT a.plan, a.credits_balance" in sql:
+                assert "JOIN api_keys k ON k.account_key_hash = a.api_key_hash" in sql
+                assert "k.active = TRUE" in sql
+                return Cursor(("pro", 97, datetime(2026, 9, 29), datetime(2026, 9, 29)))
+            if "GROUP BY u.endpoint" in sql:
+                assert "JOIN api_keys k ON k.api_key_hash = u.api_key_hash" in sql
+                return Cursor(rows=[("POST /v1/products", 8, 2)])
+            if "date_trunc('month'" in sql:
+                return Cursor((8, 2))
+            if "INTERVAL '24 hours'" in sql:
+                return Cursor((8, 2))
+            raise AssertionError(sql)
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
+    monkeypatch.setattr(monitor_store.psycopg, "connect", lambda *_args, **_kwargs: Conn())
+    monkeypatch.setattr(monitor_store, "_SCHEMA_READY", True)
+
+    result = monitor_store.get_account_usage("ecp_live_shared-key")
+
+    assert result["credits_balance"] == 97
+    assert result["total_credits_used"] == 8
+    assert result["usage"] == [{"endpoint": "POST /v1/products", "credits": 8, "requests": 2}]
+    assert result["period_usage"]["month_to_date"] == {"credits": 8, "requests": 2}
+    assert result["period_usage"]["last_24_hours"] == {"credits": 8, "requests": 2}
