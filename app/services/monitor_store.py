@@ -598,7 +598,7 @@ async def run_due_monitors() -> dict:
             with psycopg.connect(_db_url()) as lease_conn:
                 lease_row = lease_conn.execute(
                     """INSERT INTO monitor_run_leases (monitor_id, lease_token, locked_until)
-                    VALUES (%s, %s, CURRENT_TIMESTAMP + INTERVAL '60 seconds')
+                    VALUES (%s, %s, CURRENT_TIMESTAMP + INTERVAL '10 minutes')
                     ON CONFLICT (monitor_id) DO UPDATE
                     SET lease_token = EXCLUDED.lease_token,
                         locked_until = EXCLUDED.locked_until
