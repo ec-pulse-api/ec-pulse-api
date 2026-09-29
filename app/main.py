@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import secrets
 import httpx
 import psycopg
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+MAX_STRIPE_WEBHOOK_BYTES = 2 * 1024 * 1024
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -158,8 +160,18 @@ def billing_portal(api_key: str = Depends(get_api_key)):
 async def stripe_webhook(request: Request, stripe_signature: str | None = Header(default=None, alias="Stripe-Signature")):
     if not stripe_signature:
         raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_STRIPE_WEBHOOK_BYTES:
+                raise HTTPException(status_code=413, detail="Stripe webhook payload is too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header")
+    body = await request.body()
+    if len(body) > MAX_STRIPE_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Stripe webhook payload is too large")
     try:
-        return process_webhook(await request.body(), stripe_signature)
+        return process_webhook(body, stripe_signature)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -357,6 +369,6 @@ def account(request: Request, response: Response, api_key: str = Depends(get_api
 @app.get("/api/cron/check-monitors")
 async def check_monitors(authorization:str|None=Header(default=None)):
     secret=os.getenv("CRON_SECRET")
-    if not secret or authorization!=f"Bearer {secret}": raise HTTPException(status_code=401,detail="Unauthorized")
+    if not secret or not authorization or not secrets.compare_digest(authorization, f"Bearer {secret}"): raise HTTPException(status_code=401,detail="Unauthorized")
     try: return {"ok":True,"checked_at":datetime.now(timezone.utc).isoformat(),**await run_due_monitors()}
     except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
