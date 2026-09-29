@@ -474,21 +474,36 @@ async def run_due_monitors() -> dict:
     from app.services.product_parser import fetch_product
     now = datetime.now(timezone.utc)
     with psycopg.connect(_db_url()) as conn:
-        _init(conn); rows = conn.execute("""SELECT id, url, interval_minutes, webhook_url, last_price FROM monitors
+        _init(conn); rows = conn.execute("""SELECT id, url, interval_minutes, webhook_url, last_price, last_checked_at FROM monitors
             WHERE last_checked_at IS NULL OR last_checked_at <= %s - (interval_minutes * INTERVAL '1 minute')""", (now,)).fetchall()
     checked = changed = failed = 0
     async with httpx.AsyncClient(timeout=10) as client:
-        for monitor_id, url, interval, webhook_url, old_price in rows:
+        for monitor_id, url, interval, webhook_url, old_price, last_checked_at in rows:
+            lock_conn = None
+            locked = False
             try:
+                lock_conn = psycopg.connect(_db_url())
+                lock_conn.autocommit = True
+                locked = lock_conn.execute("SELECT pg_try_advisory_lock(hashtext(%s))", (monitor_id,)).fetchone()[0]
+                if not locked:
+                    continue
                 await validate_public_url(webhook_url)
                 data = await fetch_product(url); pricing = data.get("pricing", {}); new_price = pricing.get("price"); currency = pricing.get("currency"); source = data.get("source", {}); source_url = source.get("url") or url
                 if old_price is not None and new_price is not None and new_price != old_price:
-                    event = {"event": "price_changed", "monitor_id": monitor_id, "old_price": old_price, "new_price": new_price, "change_amount": round(new_price-old_price,2), "change_percent": round(((new_price-old_price)/old_price)*100,2) if old_price else None, "direction": "down" if new_price < old_price else "up", "currency": currency, "url": url, "source": {"site": source.get("site"), "url": source_url}, "captured_at": data["captured_at"]}
-                    response = await client.post(webhook_url, json=event); response.raise_for_status(); changed += 1
+                    event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"ec-pulse:monitor:{monitor_id}:{last_checked_at.isoformat() if last_checked_at else 'initial'}:{old_price}:{new_price}"))
+                    event = {"event": "price_changed", "event_id": event_id, "monitor_id": monitor_id, "old_price": old_price, "new_price": new_price, "change_amount": round(new_price-old_price,2), "change_percent": round(((new_price-old_price)/old_price)*100,2) if old_price else None, "direction": "down" if new_price < old_price else "up", "currency": currency, "url": url, "source": {"site": source.get("site"), "url": source_url}, "captured_at": data["captured_at"]}
+                    response = await client.post(webhook_url, json=event, headers={"X-EC-Pulse-Event-ID": event_id}); response.raise_for_status(); changed += 1
                 with psycopg.connect(_db_url()) as conn:
                     conn.execute("INSERT INTO price_history (monitor_id, price, currency, captured_at, source_url) VALUES (%s, %s, %s, %s, %s)", (monitor_id, new_price, currency, data["captured_at"], source_url))
                     conn.execute("UPDATE monitors SET last_price = %s, last_checked_at = %s WHERE id = %s", (new_price, now, monitor_id)); conn.commit()
                 checked += 1
             except Exception:
                 failed += 1
+            finally:
+                if lock_conn is not None:
+                    try:
+                        if locked:
+                            lock_conn.execute("SELECT pg_advisory_unlock(hashtext(%s))", (monitor_id,))
+                    finally:
+                        lock_conn.close()
     return {"checked": checked, "changed": changed, "failed": failed}
