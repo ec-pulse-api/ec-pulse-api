@@ -3,7 +3,7 @@ import os
 import secrets
 import uuid
 from threading import Lock
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import httpx
 import psycopg
@@ -69,6 +69,23 @@ CREATE TABLE IF NOT EXISTS monitor_run_leases (
     lease_token TEXT NOT NULL,
     locked_until TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    event_id TEXT PRIMARY KEY,
+    monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ NOT NULL,
+    locked_until TIMESTAMPTZ,
+    lease_token TEXT,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    delivered_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_pending
+    ON webhook_deliveries (next_attempt_at, status)
+    WHERE status = 'pending';
 
 CREATE TABLE IF NOT EXISTS api_rate_limits (
     api_key_hash TEXT PRIMARY KEY,
@@ -478,54 +495,174 @@ def get_research_opportunity(api_key: str, run_id: str) -> dict:
     }
 
 
+async def _enqueue_webhook(conn, monitor_id: str, event_id: str, payload: dict, now: datetime) -> None:
+    import json
+    conn.execute(
+        """INSERT INTO webhook_deliveries
+        (event_id, monitor_id, payload, status, attempts, next_attempt_at, created_at)
+        VALUES (%s, %s, %s, 'pending', 0, %s, %s)
+        ON CONFLICT (event_id) DO NOTHING""",
+        (event_id, monitor_id, json.dumps(payload, separators=(",", ":"), ensure_ascii=False), now, now),
+    )
+
+
+async def _deliver_pending_webhooks() -> int:
+    import json
+    delivered = 0
+    timeout = httpx.Timeout(10.0, connect=3.0)
+    async with safe_async_client(timeout=timeout, follow_redirects=False) as client:
+        while True:
+            claim_token = str(uuid.uuid4())
+            now = datetime.now(timezone.utc)
+            with psycopg.connect(_db_url()) as conn:
+                _init(conn)
+                row = conn.execute(
+                    """SELECT d.event_id, d.monitor_id, d.payload, m.webhook_url, d.attempts
+                    FROM webhook_deliveries d
+                    JOIN monitors m ON m.id = d.monitor_id
+                    WHERE d.status = 'pending'
+                      AND d.next_attempt_at <= %s
+                      AND (d.locked_until IS NULL OR d.locked_until <= %s)
+                    ORDER BY d.next_attempt_at, d.created_at
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1""",
+                    (now, now),
+                ).fetchone()
+                if not row:
+                    break
+                conn.execute(
+                    """UPDATE webhook_deliveries
+                    SET locked_until = %s, lease_token = %s
+                    WHERE event_id = %s""",
+                    (now + timedelta(seconds=30), claim_token, row[0]),
+                )
+                conn.commit()
+
+            event_id, monitor_id, payload_text, webhook_url, attempts = row
+            try:
+                await validate_public_url(webhook_url)
+                event = json.loads(payload_text)
+                async with client.stream(
+                    "POST", webhook_url, json=event,
+                    headers={"X-EC-Pulse-Event-ID": event_id},
+                ) as response:
+                    response.raise_for_status()
+                    await read_response_bytes(response, MAX_WEBHOOK_RESPONSE_BYTES)
+                with psycopg.connect(_db_url()) as conn:
+                    conn.execute(
+                        """UPDATE webhook_deliveries
+                        SET status='delivered', delivered_at=%s, locked_until=NULL,
+                            lease_token=NULL, last_error=NULL
+                        WHERE event_id=%s AND lease_token=%s""",
+                        (datetime.now(timezone.utc), event_id, claim_token),
+                    )
+                    conn.commit()
+                delivered += 1
+            except Exception as exc:
+                attempts += 1
+                delay = min(3600, 60 * (2 ** min(attempts - 1, 6)))
+                with psycopg.connect(_db_url()) as conn:
+                    conn.execute(
+                        """UPDATE webhook_deliveries
+                        SET attempts=%s, next_attempt_at=%s, locked_until=NULL,
+                            lease_token=NULL, last_error=%s
+                        WHERE event_id=%s AND lease_token=%s""",
+                        (
+                            attempts,
+                            datetime.now(timezone.utc) + timedelta(seconds=delay),
+                            f"{type(exc).__name__}: {exc}"[:500],
+                            event_id,
+                            claim_token,
+                        ),
+                    )
+                    conn.commit()
+    return delivered
+
+
 async def run_due_monitors() -> dict:
     from app.services.product_parser import fetch_product
     now = datetime.now(timezone.utc)
     with psycopg.connect(_db_url()) as conn:
-        _init(conn); rows = conn.execute("""SELECT id, url, interval_minutes, webhook_url, last_price, last_checked_at FROM monitors
-            WHERE last_checked_at IS NULL OR last_checked_at <= %s - (interval_minutes * INTERVAL '1 minute')""", (now,)).fetchall()
+        _init(conn)
+        rows = conn.execute(
+            """SELECT id, url, interval_minutes, webhook_url, last_price, last_checked_at
+            FROM monitors
+            WHERE last_checked_at IS NULL
+               OR last_checked_at <= %s - (interval_minutes * INTERVAL '1 minute')""",
+            (now,),
+        ).fetchall()
     checked = changed = failed = 0
-    async with safe_async_client(timeout=10, follow_redirects=False) as client:
-        for monitor_id, url, interval, webhook_url, old_price, last_checked_at in rows:
-            lease_token = str(uuid.uuid4())
+    for monitor_id, url, interval, webhook_url, old_price, last_checked_at in rows:
+        lease_token = str(uuid.uuid4())
+        try:
+            with psycopg.connect(_db_url()) as lease_conn:
+                lease_row = lease_conn.execute(
+                    """INSERT INTO monitor_run_leases (monitor_id, lease_token, locked_until)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP + INTERVAL '60 seconds')
+                    ON CONFLICT (monitor_id) DO UPDATE
+                    SET lease_token = EXCLUDED.lease_token,
+                        locked_until = EXCLUDED.locked_until
+                    WHERE monitor_run_leases.locked_until <= CURRENT_TIMESTAMP
+                    RETURNING lease_token""",
+                    (monitor_id, lease_token),
+                ).fetchone()
+                lease_conn.commit()
+            if not lease_row:
+                continue
+
+            await validate_public_url(webhook_url)
+            data = await fetch_product(url)
+            pricing = data.get("pricing", {})
+            new_price = pricing.get("price")
+            currency = pricing.get("currency")
+            source = data.get("source", {})
+            source_url = source.get("url") or url
+
+            with psycopg.connect(_db_url()) as conn:
+                _init(conn)
+                conn.execute(
+                    "INSERT INTO price_history (monitor_id, price, currency, captured_at, source_url) VALUES (%s, %s, %s, %s, %s)",
+                    (monitor_id, new_price, currency, data["captured_at"], source_url),
+                )
+                if old_price is not None and new_price is not None and new_price != old_price:
+                    event_id = str(uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"ec-pulse:monitor:{monitor_id}:{last_checked_at.isoformat() if last_checked_at else 'initial'}:{old_price}:{new_price}",
+                    ))
+                    event = {
+                        "event": "price_changed",
+                        "event_id": event_id,
+                        "monitor_id": monitor_id,
+                        "old_price": old_price,
+                        "new_price": new_price,
+                        "change_amount": round(new_price - old_price, 2),
+                        "change_percent": round(((new_price - old_price) / old_price) * 100, 2) if old_price else None,
+                        "direction": "down" if new_price < old_price else "up",
+                        "currency": currency,
+                        "url": url,
+                        "source": {"site": source.get("site"), "url": source_url},
+                        "captured_at": data["captured_at"],
+                    }
+                    await _enqueue_webhook(conn, monitor_id, event_id, event, now)
+                    changed += 1
+                conn.execute(
+                    "UPDATE monitors SET last_price = %s, last_checked_at = %s WHERE id = %s",
+                    (new_price, now, monitor_id),
+                )
+                conn.commit()
+            checked += 1
+        except Exception:
+            failed += 1
+        finally:
             try:
                 with psycopg.connect(_db_url()) as lease_conn:
-                    lease_row = lease_conn.execute(
-                        """INSERT INTO monitor_run_leases (monitor_id, lease_token, locked_until)
-                        VALUES (%s, %s, CURRENT_TIMESTAMP + INTERVAL '60 seconds')
-                        ON CONFLICT (monitor_id) DO UPDATE
-                        SET lease_token = EXCLUDED.lease_token,
-                            locked_until = EXCLUDED.locked_until
-                        WHERE monitor_run_leases.locked_until <= CURRENT_TIMESTAMP
-                        RETURNING lease_token""",
+                    lease_conn.execute(
+                        "DELETE FROM monitor_run_leases WHERE monitor_id = %s AND lease_token = %s",
                         (monitor_id, lease_token),
-                    ).fetchone()
+                    )
                     lease_conn.commit()
-                if not lease_row:
-                    continue
-                await validate_public_url(webhook_url)
-                data = await fetch_product(url); pricing = data.get("pricing", {}); new_price = pricing.get("price"); currency = pricing.get("currency"); source = data.get("source", {}); source_url = source.get("url") or url
-                if old_price is not None and new_price is not None and new_price != old_price:
-                    event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"ec-pulse:monitor:{monitor_id}:{last_checked_at.isoformat() if last_checked_at else 'initial'}:{old_price}:{new_price}"))
-                    event = {"event": "price_changed", "event_id": event_id, "monitor_id": monitor_id, "old_price": old_price, "new_price": new_price, "change_amount": round(new_price-old_price,2), "change_percent": round(((new_price-old_price)/old_price)*100,2) if old_price else None, "direction": "down" if new_price < old_price else "up", "currency": currency, "url": url, "source": {"site": source.get("site"), "url": source_url}, "captured_at": data["captured_at"]}
-                    async with client.stream("POST", webhook_url, json=event, headers={"X-EC-Pulse-Event-ID": event_id}) as response:
-                        response.raise_for_status()
-                        await read_response_bytes(response, MAX_WEBHOOK_RESPONSE_BYTES)
-                    changed += 1
-                with psycopg.connect(_db_url()) as conn:
-                    conn.execute("INSERT INTO price_history (monitor_id, price, currency, captured_at, source_url) VALUES (%s, %s, %s, %s, %s)", (monitor_id, new_price, currency, data["captured_at"], source_url))
-                    conn.execute("UPDATE monitors SET last_price = %s, last_checked_at = %s WHERE id = %s", (new_price, now, monitor_id)); conn.commit()
-                checked += 1
             except Exception:
-                failed += 1
-            finally:
-                try:
-                    with psycopg.connect(_db_url()) as lease_conn:
-                        lease_conn.execute(
-                            "DELETE FROM monitor_run_leases WHERE monitor_id = %s AND lease_token = %s",
-                            (monitor_id, lease_token),
-                        )
-                        lease_conn.commit()
-                except Exception:
-                    pass
-    return {"checked": checked, "changed": changed, "failed": failed}
+                pass
+
+    delivered = await _deliver_pending_webhooks()
+    return {"checked": checked, "changed": changed, "failed": failed, "webhooks_delivered": delivered}
