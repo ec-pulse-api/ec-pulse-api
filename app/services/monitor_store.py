@@ -356,7 +356,7 @@ def _owned_monitor(conn, api_key: str, monitor_id: str):
     return row
 
 def _history_rows(conn, monitor_id: str, limit: int):
-    return conn.execute("SELECT price, currency, captured_at, source_url FROM price_history WHERE monitor_id = %s ORDER BY captured_at DESC LIMIT %s", (monitor_id, limit)).fetchall()
+    return conn.execute("SELECT price, currency, captured_at, source_url FROM price_history WHERE monitor_id = %s ORDER BY captured_at DESC, id DESC LIMIT %s", (monitor_id, limit)).fetchall()
 
 def get_price_history(api_key: str, monitor_id: str, limit: int = 100) -> dict:
     with psycopg.connect(_db_url()) as conn:
