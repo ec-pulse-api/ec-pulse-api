@@ -91,7 +91,7 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
             current_period_start=%s, current_period_end=%s, cancel_at_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), bool(subscription.get("cancel_at_period_end", False)), event_created, event_id, datetime.now(timezone.utc), row[0]))
     else:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
-            current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan or "free", subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, event_id, datetime.now(timezone.utc), row[0]))
+            current_period_start=%s, current_period_end=%s, cancel_at_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan or "free", subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), bool(subscription.get("cancel_at_period_end", False)), event_created, event_id, datetime.now(timezone.utc), row[0]))
     return True
 
 
