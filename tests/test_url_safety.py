@@ -14,3 +14,18 @@ async def test_private_url_is_rejected():
     with pytest.raises(ValueError):
         await validate_public_url("http://127.0.0.1:8000/health")
 
+
+@pytest.mark.asyncio
+async def test_nonstandard_port_is_rejected():
+    from app.services.url_safety import validate_public_url
+
+    with pytest.raises(ValueError):
+        await validate_public_url("https://example.com:8080/")
+
+
+@pytest.mark.asyncio
+async def test_url_credentials_are_rejected():
+    from app.services.url_safety import validate_public_url
+
+    with pytest.raises(ValueError):
+        await validate_public_url("https://user:pass@example.com/")
