@@ -196,3 +196,52 @@ def test_checkout_rejects_existing_active_subscription(monkeypatch):
         assert "active Stripe subscription" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_checkout_holds_account_lock_through_stripe_call(monkeypatch):
+    import app.services.billing as billing
+
+    class Cursor:
+        def fetchone(self):
+            return (None, None, None)
+
+    class Conn:
+        def __init__(self):
+            self.committed = False
+            self.closed = False
+            self.sql = None
+        def execute(self, sql, params=()):
+            self.sql = sql
+            return Cursor()
+        def commit(self):
+            self.committed = True
+        def rollback(self):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.closed = True
+
+    conn = Conn()
+    class Checkout:
+        @staticmethod
+        def create(**kwargs):
+            assert conn.closed is False
+            assert conn.committed is False
+            return {"url": "https://checkout.example/session"}
+
+    class FakeStripe:
+        checkout = type("CheckoutContainer", (), {"Session": Checkout})
+
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    monkeypatch.setenv("APP_BASE_URL", "https://example.com")
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: conn)
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr("app.services.monitor_store._account_hash", lambda key: "account-hash")
+
+    result = billing.create_checkout("secret", "pro")
+    assert result == "https://checkout.example/session"
+    assert conn.committed is True
+    assert "FOR UPDATE" in conn.sql
