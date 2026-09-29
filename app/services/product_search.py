@@ -57,7 +57,7 @@ async def _amazon_token() -> str:
                 raise ValueError("Amazon token response is too large")
             response.raise_for_status()
             if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
-                raise ValueError("Yahoo API response is too large")
+                raise ValueError("Amazon token response is too large")
             payload = response.json()
         token = payload.get("access_token")
         expires_in = payload.get("expires_in", 3600)
