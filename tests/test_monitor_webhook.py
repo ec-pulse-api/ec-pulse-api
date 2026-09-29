@@ -67,3 +67,9 @@ def test_webhook_delivery_checks_lease_before_post():
     assert "AND lease_token = %s" in source
     assert "AND locked_until > CURRENT_TIMESTAMP" in source
     assert "FOR UPDATE" in source
+
+
+def test_webhook_delivery_counts_only_confirmed_state_transition():
+    source = inspect.getsource(monitor_store._deliver_pending_webhooks)
+    assert "if cursor.rowcount != 1:" in source
+    assert "delivered += 1" in source
