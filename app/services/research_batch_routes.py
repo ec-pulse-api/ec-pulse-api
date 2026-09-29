@@ -5,6 +5,7 @@ from app.main import get_api_key, _charge, _usage_headers
 from app.services.consumer_insights import analyze_comments
 from app.services.monitor_store import save_research_run
 from app.services.research_ingest import fetch_public_comments
+from app.services.url_safety import validate_public_url
 
 
 class ResearchBatchRequest(BaseModel):
@@ -53,6 +54,11 @@ def register_research_batch_routes(app: FastAPI):
         response: Response,
         api_key: str = Depends(get_api_key),
     ):
+        for url in request.urls:
+            try:
+                await validate_public_url(str(url))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid public URL: {exc}") from exc
         charge = _charge(api_key, "POST /v1/research/batch", len(request.urls))
         for key, value in _usage_headers(request_http, api_key, charge).items():
             response.headers[key] = value
