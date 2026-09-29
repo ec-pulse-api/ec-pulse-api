@@ -62,6 +62,12 @@ CREATE TABLE IF NOT EXISTS api_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_api_usage_key_created ON api_usage (api_key_hash, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS api_rate_limits (
+    api_key_hash TEXT PRIMARY KEY,
+    window_start TIMESTAMPTZ NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS research_runs (
     id TEXT PRIMARY KEY,
     owner_key_hash TEXT NOT NULL,

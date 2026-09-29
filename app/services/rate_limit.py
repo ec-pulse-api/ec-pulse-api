@@ -1,25 +1,50 @@
-import time
-from collections import defaultdict
-from threading import Lock
+import os
+from datetime import datetime, timezone
+
+import psycopg
 
 _WINDOWS = {"free": 60, "pro": 60, "business": 60}
 _LIMITS = {"free": 30, "pro": 300, "business": 3000}
-_BUCKETS: dict[str, list[float]] = defaultdict(list)
-_LOCK = Lock()
+
+
+def _db_url() -> str:
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL is not configured")
+    return url
+
 
 def check_rate_limit(api_key_hash: str, plan: str) -> dict:
-    now = time.time()
+    """Enforce an atomic shared fixed-window limit in Postgres."""
     window = _WINDOWS.get(plan, 60)
     limit = _LIMITS.get(plan, 30)
-    with _LOCK:
-        bucket = _BUCKETS[api_key_hash]
-        cutoff = now - window
-        _BUCKETS[api_key_hash] = bucket = [t for t in bucket if t > cutoff]
-        if not bucket:
-            _BUCKETS.pop(api_key_hash, None)
-            bucket = _BUCKETS[api_key_hash]
-        if len(bucket) >= limit:
-            retry_after = max(1, int(window - (now - bucket[0])))
-            return {"allowed": False, "limit": limit, "remaining": 0, "reset_seconds": retry_after}
-        bucket.append(now)
-        return {"allowed": True, "limit": limit, "remaining": max(0, limit - len(bucket)), "reset_seconds": window}
+
+    with psycopg.connect(_db_url()) as conn:
+        now = datetime.now(timezone.utc)
+        current_window = now.replace(second=0, microsecond=0)
+        row = conn.execute(
+            """
+            INSERT INTO api_rate_limits (api_key_hash, window_start, request_count)
+            VALUES (%s, %s, 1)
+            ON CONFLICT (api_key_hash) DO UPDATE
+            SET window_start = EXCLUDED.window_start,
+                request_count = CASE
+                    WHEN api_rate_limits.window_start = EXCLUDED.window_start
+                    THEN LEAST(api_rate_limits.request_count + 1, %s)
+                    ELSE 1
+                END
+            RETURNING window_start, request_count
+            """,
+            (api_key_hash, current_window, limit + 1),
+        ).fetchone()
+
+    request_count = row[1]
+    elapsed = max(0, (now - row[0]).total_seconds())
+    reset_seconds = max(1, int(window - elapsed))
+
+    return {
+        "allowed": request_count <= limit,
+        "limit": limit,
+        "remaining": max(0, limit - request_count),
+        "reset_seconds": reset_seconds,
+    }
