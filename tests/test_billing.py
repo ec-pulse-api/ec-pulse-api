@@ -130,7 +130,7 @@ def test_subscription_state_row_is_locked_during_cancellation(monkeypatch):
     monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
     monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
     monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
-    monkeypatch.setattr(billing, "_account_hash", lambda key: "account-hash")
+    monkeypatch.setattr("app.services.monitor_store._account_hash", lambda key: "account-hash")
 
     result = billing.cancel_subscription("secret")
     assert result["cancel_at_period_end"] is True
