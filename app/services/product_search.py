@@ -258,6 +258,8 @@ async def _search_yahoo_official(query: str, limit: int) -> list[dict]:
                 )
                 _yahoo_last_request_at = asyncio.get_running_loop().time()
             response.raise_for_status()
+            if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
+                raise ValueError("Yahoo API response is too large")
             payload = response.json()
     hits = payload.get("hits", [])
     if not isinstance(hits, list):
