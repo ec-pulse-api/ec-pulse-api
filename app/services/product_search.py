@@ -7,7 +7,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.services.product_cache import fetch_product_cached
-from app.services.url_safety import MAX_REDIRECTS, next_redirect, validate_public_url
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, safe_async_client, validate_public_url
 
 
 SEARCH_URLS = {
@@ -46,7 +46,7 @@ async def _amazon_token() -> str:
         token_url = AMAZON_TOKEN_URLS.get(credential_version)
         if not token_url:
             raise RuntimeError("AMAZON_CREDENTIAL_VERSION must be 3.1, 3.2, or 3.3")
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with safe_async_client(timeout=15.0) as client:
             response = await client.post(
                 token_url,
                 headers={"Content-Type": "application/json"},
