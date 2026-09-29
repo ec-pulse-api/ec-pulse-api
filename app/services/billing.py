@@ -107,8 +107,19 @@ def process_webhook(payload: bytes, signature: str) -> dict:
             customer_id = obj.get("customer")
             api_key_hash = (obj.get("metadata") or {}).get("api_key_hash")
             if customer_id and api_key_hash:
-                conn.execute("UPDATE api_accounts SET stripe_customer_id=%s, updated_at=%s WHERE api_key_hash=%s", (customer_id, now, api_key_hash))
+                conn.execute(
+                    "UPDATE api_accounts SET stripe_customer_id=%s, updated_at=%s WHERE api_key_hash=%s",
+                    (customer_id, now, api_key_hash),
+                )
                 handled = True
+                subscription_id = obj.get("subscription")
+                if subscription_id:
+                    try:
+                        subscription = sdk.Subscription.retrieve(subscription_id)
+                    except Exception:
+                        subscription = None
+                    if subscription:
+                        handled = _apply_subscription(conn, subscription.to_dict_recursive(), event_data.get("created")) or handled
         conn.commit()
     return {"ok": True, "duplicate": False, "event_id": event_id, "type": event_type, "handled": handled}
 
