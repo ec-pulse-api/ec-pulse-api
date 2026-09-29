@@ -8,6 +8,7 @@ from hashlib import sha256
 import psycopg
 
 from app.services.product_parser import fetch_product
+from app.services.url_safety import validate_public_url
 
 
 def _db_url() -> str:
@@ -67,6 +68,7 @@ def _key(url: str) -> str:
 async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, bool]:
     if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or not 1 <= ttl_seconds <= 86400:
         raise ValueError("ttl_seconds must be between 1 and 86400")
+    url = str(await validate_public_url(url))
     now = datetime.now(timezone.utc)
     cache_key = _key(url)
     _ensure_initialized()
@@ -82,7 +84,7 @@ async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, 
     # Use a short-lived DB lease instead of holding a PostgreSQL connection
     # open while the external product page is being fetched.
     lock_token = sha256(f"{cache_key}:{datetime.now(timezone.utc).timestamp()}".encode()).hexdigest()
-    lease_until = datetime.now(timezone.utc) + timedelta(seconds=60)
+    lease_until = datetime.now(timezone.utc) + timedelta(seconds=300)
     with psycopg.connect(_db_url()) as conn:
         claimed = conn.execute(
             """
