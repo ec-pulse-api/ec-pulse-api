@@ -75,15 +75,11 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
         (row[0],),
     ).fetchone()
     if event_created is not None and state and state[0] is not None:
-        previous_created, previous_event_id = state
+        previous_created, _previous_event_id = state
+        # Stripe event IDs are opaque identifiers, not chronological keys.
+        # Equal-timestamp events are therefore not ordered by ID; the current
+        # subscription state fetched from Stripe is the source of truth.
         if event_created < previous_created:
-            return False
-        if (
-            event_created == previous_created
-            and previous_event_id
-            and event_id
-            and event_id <= previous_event_id
-        ):
             return False
     effective_plan = plan if status in {"active", "trialing", "past_due"} else None
     if effective_plan:
