@@ -10,7 +10,12 @@ _ALLOWED_PORTS = {80, 443}
 
 def _blocked_ip(address: str) -> bool:
     ip = ipaddress.ip_address(address)
+    # RFC 6598 shared address space is not considered private by Python's
+    # ipaddress module, but it is not a safe destination for server-side fetches.
+    shared = ipaddress.ip_network("100.64.0.0/10")
     return (
+        ip in shared
+        or
         ip.is_private
         or ip.is_loopback
         or ip.is_link_local
