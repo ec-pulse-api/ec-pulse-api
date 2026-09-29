@@ -477,7 +477,7 @@ async def run_due_monitors() -> dict:
         _init(conn); rows = conn.execute("""SELECT id, url, interval_minutes, webhook_url, last_price, last_checked_at FROM monitors
             WHERE last_checked_at IS NULL OR last_checked_at <= %s - (interval_minutes * INTERVAL '1 minute')""", (now,)).fetchall()
     checked = changed = failed = 0
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
         for monitor_id, url, interval, webhook_url, old_price, last_checked_at in rows:
             lock_conn = None
             locked = False
