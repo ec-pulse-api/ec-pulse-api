@@ -233,8 +233,16 @@ def create_checkout(api_key: str, plan: str) -> str:
     from app.services.monitor_store import _account_hash
     with psycopg.connect(_db_url()) as conn:
         _init_billing(conn)
-        row = conn.execute("SELECT stripe_customer_id FROM api_accounts WHERE api_key_hash=%s", (_account_hash(api_key),)).fetchone()
+        row = conn.execute(
+            """SELECT stripe_customer_id, stripe_subscription_id, subscription_status
+               FROM api_accounts
+               WHERE api_key_hash=%s
+               FOR UPDATE""",
+            (_account_hash(api_key),),
+        ).fetchone()
     customer_id = row[0] if row else None
+    if row and row[1] and row[2] in {"active", "trialing", "past_due"}:
+        raise ValueError("An active Stripe subscription is already linked to this account")
     params = {"mode": "subscription", "line_items": [{"price": price_id, "quantity": 1}], "success_url": f"{base_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}", "cancel_url": f"{base_url}/billing/cancel", "metadata": {"api_key_hash": _account_hash(api_key), "plan": plan}}
     if customer_id:
         params["customer"] = customer_id
