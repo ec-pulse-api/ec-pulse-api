@@ -422,7 +422,7 @@ def test_expired_checkout_completion_still_links_customer_and_subscription(monke
             if "INSERT INTO billing_events" in sql:
                 return Cursor(("evt_checkout_expired",))
             if "SELECT checkout_pending_key" in sql:
-                return Cursor(("expired-key", None))
+                return Cursor(("newer-key", None))
             if "SELECT api_key_hash" in sql:
                 return Cursor(("account-hash",))
             if "SELECT stripe_subscription_id, subscription_status" in sql:
@@ -443,7 +443,8 @@ def test_expired_checkout_completion_still_links_customer_and_subscription(monke
 
     result = billing.process_webhook(b"payload", "sig")
     assert result["handled"] is True
-    assert any("stripe_customer_id=%s, updated_at=%s" in sql for sql, _ in conn.updates)
+    assert any("stripe_customer_id=%s, updated_at=%s WHERE api_key_hash=%s AND (stripe_customer_id IS NULL OR stripe_customer_id=%s)" in sql for sql, _ in conn.updates)
+    assert not any("checkout_pending_key=NULL" in sql for sql, _ in conn.updates)
 
 
 def test_stale_terminal_event_from_old_subscription_cannot_replace_new_active_subscription(monkeypatch):
