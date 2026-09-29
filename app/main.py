@@ -316,7 +316,7 @@ async def monitor(request_http:Request,response:Response,request:MonitorRequest,
         await validate_public_url(str(request.url))
         await validate_public_url(str(request.webhook_url))
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid webhook URL: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"Invalid monitor or webhook URL: {exc}") from exc
     charge=_charge(api_key,"POST /v1/monitors")
     for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
     try: return create_monitor(api_key=api_key,url=str(request.url),interval_minutes=request.interval_minutes,webhook_url=str(request.webhook_url))
