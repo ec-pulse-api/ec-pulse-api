@@ -180,7 +180,7 @@ def test_checkout_rejects_existing_active_subscription(monkeypatch):
 
     class Cursor:
         def fetchone(self):
-            return ("account-hash", "cus_123", "sub_123", "active", None, None)
+            return ("account-hash", "cus_123", "sub_123", "active", None, None, None)
 
     class Conn:
         def execute(self, sql, params=()):
@@ -213,7 +213,7 @@ def test_checkout_sets_pending_before_stripe_call(monkeypatch):
 
     class Cursor:
         def fetchone(self):
-            return ("account-hash", None, None, None, None, None)
+            return ("account-hash", None, None, None, None, None, None)
 
     class Conn:
         def __init__(self):
@@ -301,7 +301,7 @@ def test_checkout_rejects_existing_pending_checkout(monkeypatch):
 
     class Cursor:
         def fetchone(self):
-            return ("account-hash", "cus_123", None, None, "pending-key", datetime.now(timezone.utc) + timedelta(minutes=5))
+            return ("account-hash", "cus_123", None, None, "pending-key", datetime.now(timezone.utc) + timedelta(minutes=5), "cs_old")
 
     class Conn:
         def execute(self, sql, params=()):
@@ -412,3 +412,106 @@ def test_new_subscription_can_replace_terminal_previous_subscription(monkeypatch
     new_subscription["id"] = "sub_new"
     assert _apply_subscription(conn, new_subscription, 300) is True
     assert conn.updates == 1
+
+
+def test_expired_checkout_is_expired_in_stripe_before_new_checkout(monkeypatch):
+    import app.services.billing as billing
+    from datetime import datetime, timezone, timedelta
+
+    class Cursor:
+        def fetchone(self):
+            return ("account-hash", None, None, None, "old-key",
+                    datetime.now(timezone.utc) - timedelta(minutes=1), "cs_old")
+
+    class Conn:
+        def __init__(self):
+            self.sql = []
+        def execute(self, sql, params=()):
+            self.sql.append((sql, params))
+            return Cursor()
+        def commit(self): pass
+        def rollback(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    conn = Conn()
+
+    class Session:
+        def __init__(self, status="open"):
+            self.status = status
+            self.id = "cs_new"
+            self.url = "https://checkout.example/new"
+        def get(self, key, default=None):
+            return getattr(self, key, default)
+
+    class Sessions:
+        @staticmethod
+        def retrieve(session_id):
+            assert session_id == "cs_old"
+            return Session("open")
+        @staticmethod
+        def expire(session_id):
+            assert session_id == "cs_old"
+            return Session("expired")
+        @staticmethod
+        def create(**kwargs):
+            return Session("open")
+
+    class FakeStripe:
+        checkout = type("CheckoutContainer", (), {"Session": Sessions})
+
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    monkeypatch.setenv("APP_BASE_URL", "https://example.com")
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: conn)
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr("app.services.monitor_store._account_hash", lambda key: "account-hash")
+
+    assert billing.create_checkout("secret", "pro") == "https://checkout.example/new"
+    assert any("checkout_session_id" in sql for sql, _ in conn.sql)
+
+
+def test_expired_pending_completed_checkout_waits_for_webhook(monkeypatch):
+    import app.services.billing as billing
+    from datetime import datetime, timezone, timedelta
+
+    class Cursor:
+        def fetchone(self):
+            return ("account-hash", None, None, None, "old-key",
+                    datetime.now(timezone.utc) - timedelta(minutes=1), "cs_old")
+
+    class Conn:
+        def execute(self, sql, params=()):
+            return Cursor()
+        def commit(self): pass
+        def rollback(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    class Session:
+        status = "complete"
+        def get(self, key, default=None): return getattr(self, key, default)
+
+    class Sessions:
+        @staticmethod
+        def retrieve(session_id):
+            return Session()
+
+    class FakeStripe:
+        checkout = type("CheckoutContainer", (), {"Session": Sessions})
+
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    monkeypatch.setenv("APP_BASE_URL", "https://example.com")
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: Conn())
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr("app.services.monitor_store._account_hash", lambda key: "account-hash")
+
+    try:
+        billing.create_checkout("secret", "pro")
+    except RuntimeError as exc:
+        assert "waiting for webhook" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
