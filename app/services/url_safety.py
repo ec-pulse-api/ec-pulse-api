@@ -4,6 +4,7 @@ import socket
 from urllib.parse import urljoin, urlparse
 
 MAX_REDIRECTS = 5
+_ALLOWED_PORTS = {80, 443}
 
 
 def _blocked_ip(address: str) -> bool:
@@ -22,6 +23,10 @@ async def validate_public_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("A valid public http(s) URL is required")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URL credentials are not allowed")
+    if parsed.port not in (None, *_ALLOWED_PORTS):
+        raise ValueError("Only ports 80 and 443 are allowed")
 
     host = parsed.hostname
     try:
