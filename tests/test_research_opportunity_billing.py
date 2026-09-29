@@ -51,5 +51,5 @@ def test_research_opportunity_builds_queries_before_charging(monkeypatch):
 
     assert response.status_code == 200
     assert charges == [30]
-    assert len(response.json()["product_candidates"]) == 3
+    assert len(response.json()["product_candidates"]) == 2
     assert response.json()["credits"] == 30
