@@ -16,6 +16,7 @@ from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
 from app.services.research_ingest import fetch_public_comments
 from app.services.rate_limit import check_rate_limit
+from app.services.url_safety import validate_public_url
 
 app = FastAPI(title="EC Pulse API", description="EC product data API and market research service", version="0.12.0")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -268,7 +269,11 @@ async def product_compare(request_http:Request,response:Response,request:Product
     return {"count":len(products),"successful":len(successful),"results":products,"price_ranking":[{"rank":i,"url":x.get("source",{}).get("url"),"title":x.get("product",{}).get("title"),"price":x.get("pricing",{}).get("price"),"currency":x.get("pricing",{}).get("currency"),"marketplace":x.get("source",{}).get("marketplace"),"product_id":x.get("source",{}).get("product_id")} for i,x in enumerate(ranked,1)]}
 
 @app.post("/v1/monitors")
-def monitor(request_http:Request,response:Response,request:MonitorRequest,api_key:str=Depends(get_api_key)):
+async def monitor(request_http:Request,response:Response,request:MonitorRequest,api_key:str=Depends(get_api_key)):
+    try:
+        await validate_public_url(str(request.webhook_url))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid webhook URL: {exc}") from exc
     charge=_charge(api_key,"POST /v1/monitors")
     for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
     try: return create_monitor(api_key=api_key,url=str(request.url),interval_minutes=request.interval_minutes,webhook_url=str(request.webhook_url))
