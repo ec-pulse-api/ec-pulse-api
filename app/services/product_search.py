@@ -6,6 +6,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.services.product_cache import fetch_product_cached
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, validate_public_url
 
 
 SEARCH_URLS = {
@@ -47,13 +48,24 @@ def _links(html: str, marketplace: str) -> list[str]:
 
 async def _search_marketplace(marketplace: str, query: str, limit: int) -> list[str]:
     url = SEARCH_URLS[marketplace].format(query=quote_plus(query))
+    current_url = await validate_public_url(url)
     async with httpx.AsyncClient(
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=15.0,
         headers={"User-Agent": "EC-Pulse/0.1 (+https://ec-pulse-api.vercel.app)"},
     ) as client:
-        response = await client.get(url)
-        response.raise_for_status()
+        for _ in range(MAX_REDIRECTS + 1):
+            response = await client.get(current_url)
+            if response.is_redirect or response.is_permanent_redirect:
+                location = response.headers.get("location")
+                if not location:
+                    raise ValueError("Redirect response did not include a location")
+                current_url = await validate_public_url(next_redirect(current_url, location))
+                continue
+            response.raise_for_status()
+            break
+        else:
+            raise ValueError("Too many redirects")
     return _links(response.text, marketplace)[:limit]
 
 
