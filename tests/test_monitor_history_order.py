@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 from app.services import monitor_store
 
 
