@@ -113,6 +113,18 @@ def safe_async_transport():
     return transport
 
 
+async def read_response_bytes(response, max_bytes: int) -> bytes:
+    """Read an HTTP response with a hard application-level byte ceiling."""
+    chunks = []
+    total = 0
+    async for chunk in response.aiter_bytes():
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError("HTTP response is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def safe_async_client(**kwargs):
     import httpx
 
