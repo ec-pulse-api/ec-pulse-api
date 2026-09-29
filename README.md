@@ -43,6 +43,7 @@ Plan limits, Stripe checkout, subscription synchronization, credit accounting, a
 - `POST /v1/consumer-insights/analyze`
 - `POST /v1/billing/checkout`
 - `POST /v1/billing/portal`
+- `POST /v1/billing/cancel`
 - `POST /api/stripe/webhook`
 
 ## Authentication
@@ -93,3 +94,15 @@ PostgreSQL
 3. API key self-service
 4. Public API documentation
 5. TRACER integration
+
+## Legal documents
+
+Customer-facing policy drafts are maintained under `docs/legal/`:
+
+- [Terms of Service](docs/legal/terms-of-service.md)
+- [Privacy Policy](docs/legal/privacy-policy.md)
+- [Billing / Refund / Cancellation Policy](docs/legal/billing-and-cancellation.md)
+- [Specified Commercial Transactions Act disclosure](docs/legal/commercial-transactions.md)
+- [Acceptable Use Policy](docs/legal/acceptable-use.md)
+
+Before public launch, replace all `［要入力］` fields with the actual operator, contact, jurisdiction, retention, refund, and other business/legal details and review the final text for the applicable jurisdiction.
