@@ -1,7 +1,7 @@
 import re
 from urllib.parse import urlparse
 
-from app.services.url_safety import MAX_REDIRECTS, next_redirect, safe_async_client, validate_public_url
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, read_response_bytes, safe_async_client, validate_public_url
 
 import httpx
 from bs4 import BeautifulSoup
@@ -91,17 +91,18 @@ async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
 
     async with safe_async_client(timeout=15, follow_redirects=False, headers=headers) as client:
         for _ in range(MAX_REDIRECTS + 1):
-            response = await client.get(current_url)
-            content_length = response.headers.get("Content-Length")
-            if content_length and content_length.isdigit() and int(content_length) > MAX_RESPONSE_BYTES:
-                raise ValueError("Research page response is too large")
-            if response.is_redirect or response.is_permanent_redirect:
-                location = response.headers.get("location")
-                if not location:
-                    raise ValueError("Redirect response did not include a location")
-                current_url = await validate_public_url(next_redirect(current_url, location))
-                continue
-            response.raise_for_status()
+            async with client.stream("GET", current_url) as response:
+                content_length = response.headers.get("Content-Length")
+                if content_length and content_length.isdigit() and int(content_length) > MAX_RESPONSE_BYTES:
+                    raise ValueError("Research page response is too large")
+                if response.is_redirect or response.is_permanent_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Redirect response did not include a location")
+                    current_url = await validate_public_url(next_redirect(current_url, location))
+                    continue
+                response.raise_for_status()
+                body = await read_response_bytes(response, MAX_RESPONSE_BYTES)
             break
         else:
             raise ValueError("Too many redirects")
@@ -110,9 +111,7 @@ async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
     source = detect_source(final_parsed.netloc)
     market = detect_market(final_parsed.netloc)
     locale = detect_locale(market)
-    if len(response.content) > MAX_RESPONSE_BYTES:
-        raise ValueError("Research page response is too large")
-    soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(body, "html.parser")
     candidates = []
     for selector in _selectors_for(source):
         for node in soup.select(selector):
