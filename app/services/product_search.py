@@ -18,9 +18,140 @@ SEARCH_URLS = {
 
 
 YAHOO_API_URL = "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
+AMAZON_API_URL = "https://creatorsapi.amazon/catalog/v1/searchItems"
+AMAZON_TOKEN_URL = "https://api.amazon.co.jp/auth/o2/token"
 _YAHOO_REQUEST_LOCK = asyncio.Lock()
 _YAHOO_MIN_INTERVAL_SECONDS = 1.05
 _yahoo_last_request_at = 0.0
+_AMAZON_TOKEN_LOCK = asyncio.Lock()
+_amazon_access_token: str | None = None
+_amazon_token_expires_at = 0.0
+_YAHOO_REQUEST_LOCK = asyncio.Lock()
+_YAHOO_MIN_INTERVAL_SECONDS = 1.05
+_yahoo_last_request_at = 0.0
+
+
+async def _amazon_token() -> str:
+    global _amazon_access_token, _amazon_token_expires_at
+    client_id = os.getenv("AMAZON_CLIENT_ID")
+    client_secret = os.getenv("AMAZON_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise RuntimeError("Amazon Creators API credentials are not configured")
+    now = asyncio.get_running_loop().time()
+    if _amazon_access_token and now < _amazon_token_expires_at - 60:
+        return _amazon_access_token
+    async with _AMAZON_TOKEN_LOCK:
+        now = asyncio.get_running_loop().time()
+        if _amazon_access_token and now < _amazon_token_expires_at - 60:
+            return _amazon_access_token
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                AMAZON_TOKEN_URL,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "scope": "creatorsapi::default",
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        token = payload.get("access_token")
+        expires_in = payload.get("expires_in", 3600)
+        if not token:
+            raise ValueError("Invalid Amazon Creators API token response")
+        _amazon_access_token = token
+        _amazon_token_expires_at = asyncio.get_running_loop().time() + float(expires_in)
+        return token
+
+
+def _amazon_item(item: dict) -> dict:
+    info = item.get("itemInfo") if isinstance(item.get("itemInfo"), dict) else {}
+    title = info.get("title") if isinstance(info.get("title"), dict) else {}
+    byline = info.get("byLineInfo") if isinstance(info.get("byLineInfo"), dict) else {}
+    brand = byline.get("brand") if isinstance(byline.get("brand"), dict) else {}
+    offers = item.get("offersV2") if isinstance(item.get("offersV2"), dict) else {}
+    listings = offers.get("listings") if isinstance(offers.get("listings"), list) else []
+    listing = listings[0] if listings and isinstance(listings[0], dict) else {}
+    price = listing.get("price") if isinstance(listing.get("price"), dict) else {}
+    money = price.get("money") if isinstance(price.get("money"), dict) else {}
+    availability = listing.get("availability") if isinstance(listing.get("availability"), dict) else {}
+    images = item.get("images") if isinstance(item.get("images"), dict) else {}
+    primary = images.get("primary") if isinstance(images.get("primary"), dict) else {}
+    image = primary.get("medium") if isinstance(primary.get("medium"), dict) else primary.get("small")
+    return {
+        "url": item.get("detailPageURL"),
+        "cache_hit": False,
+        "product": {
+            "product": {
+                "title": title.get("displayValue"),
+                "brand": brand.get("displayValue"),
+                "model": None,
+                "sku": item.get("asin"),
+                "gtin": None,
+                "product_id": item.get("asin"),
+            },
+            "pricing": {
+                "price": money.get("amount"),
+                "list_price": None,
+                "currency": money.get("currency") or "JPY",
+            },
+            "availability": {"status": availability.get("type")},
+            "rating": {"score": None, "count": 0},
+            "seller": {"name": (listing.get("merchantInfo") or {}).get("name") if isinstance(listing.get("merchantInfo"), dict) else None},
+            "source": {
+                "site": "amazon.co.jp",
+                "marketplace": "amazon",
+                "product_id": item.get("asin"),
+                "url": item.get("detailPageURL"),
+                "image": image.get("url") if isinstance(image, dict) else None,
+            },
+        },
+    }
+
+
+async def _search_amazon_official(query: str, limit: int) -> list[dict]:
+    partner_tag = os.getenv("AMAZON_PARTNER_TAG")
+    if not partner_tag:
+        raise RuntimeError("AMAZON_PARTNER_TAG is not configured")
+    token = await _amazon_token()
+    payload = {
+        "keywords": query,
+        "itemCount": min(limit, 10),
+        "marketplace": "www.amazon.co.jp",
+        "partnerTag": partner_tag,
+        "searchIndex": "All",
+        "sortBy": "Price:LowToHigh",
+        "resources": [
+            "images.primary.medium",
+            "itemInfo.title",
+            "itemInfo.byLineInfo",
+            "offersV2.listings.price",
+            "offersV2.listings.availability",
+            "offersV2.listings.merchantInfo",
+        ],
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            AMAZON_API_URL,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "x-marketplace": "www.amazon.co.jp",
+            },
+            json=payload,
+        )
+        if response.status_code == 401:
+            _amazon_access_token = None
+            _amazon_token_expires_at = 0.0
+        response.raise_for_status()
+        data = response.json()
+    result = data.get("searchResult") if isinstance(data.get("searchResult"), dict) else {}
+    items = result.get("items", [])
+    if not isinstance(items, list):
+        raise ValueError("Invalid Amazon Creators API response")
+    return [_amazon_item(item) for item in items[:limit] if isinstance(item, dict)]
 
 
 def _yahoo_item(item: dict) -> dict:
@@ -172,7 +303,7 @@ async def _search_marketplace(marketplace: str, query: str, limit: int) -> list[
 
 async def search_products(query: str, marketplaces: list[str], limit: int) -> dict:
     results_by_marketplace = await asyncio.gather(
-        *(_search_yahoo_official(query, limit) if marketplace == "yahoo" and os.getenv("YAHOO_SHOPPING_APP_ID") else _search_rakuten_official(query, limit) if marketplace == "rakuten" and os.getenv("RAKUTEN_APPLICATION_ID") and os.getenv("RAKUTEN_ACCESS_KEY") else _search_marketplace(marketplace, query, limit) for marketplace in marketplaces),
+        *(_search_amazon_official(query, limit) if marketplace == "amazon" and os.getenv("AMAZON_CLIENT_ID") and os.getenv("AMAZON_CLIENT_SECRET") and os.getenv("AMAZON_PARTNER_TAG") else _search_yahoo_official(query, limit) if marketplace == "yahoo" and os.getenv("YAHOO_SHOPPING_APP_ID") else _search_rakuten_official(query, limit) if marketplace == "rakuten" and os.getenv("RAKUTEN_APPLICATION_ID") and os.getenv("RAKUTEN_ACCESS_KEY") else _search_marketplace(marketplace, query, limit) for marketplace in marketplaces),
         return_exceptions=True,
     )
 
@@ -187,6 +318,9 @@ async def search_products(query: str, marketplaces: list[str], limit: int) -> di
             })
             continue
 
+        if marketplace == "amazon" and os.getenv("AMAZON_CLIENT_ID") and os.getenv("AMAZON_CLIENT_SECRET") and os.getenv("AMAZON_PARTNER_TAG"):
+            candidates.append({"marketplace": marketplace, "ok": True, "results": result})
+            continue
         if marketplace == "yahoo" and os.getenv("YAHOO_SHOPPING_APP_ID"):
             candidates.append({"marketplace": marketplace, "ok": True, "results": result})
             continue
