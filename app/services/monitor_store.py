@@ -299,17 +299,16 @@ def save_research_run(api_key: str, item: dict, analysis: dict) -> dict:
                 (run_id, pain.get("pain", "unknown"), int(pain.get("count", 0)),
                  float(pain.get("share_percent", 0)), now),
             )
-        conn.commit()
-
         previous = conn.execute(
             """SELECT rr.id, rr.created_at, rr.comments_count, rp.pain, rp.count, rp.share_percent
             FROM research_runs rr
             LEFT JOIN research_pain_points rp ON rp.run_id = rr.id
             WHERE rr.url = %s AND rr.owner_key_hash = %s AND rr.id <> %s
-            ORDER BY rr.created_at DESC
+            ORDER BY rr.created_at DESC, rr.id DESC
             LIMIT 50""",
             (item.get("url"), owner, run_id),
         ).fetchall()
+        conn.commit()
 
     previous_by_pain = {}
     previous_run_id = None
