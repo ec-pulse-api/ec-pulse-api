@@ -481,35 +481,38 @@ async def _search_yahoo_official(query: str, limit: int) -> list[dict]:
         wait = _YAHOO_MIN_INTERVAL_SECONDS - (now - _yahoo_last_request_at)
         if wait > 0:
             await asyncio.sleep(wait)
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(
-                YAHOO_API_URL,
-                params={"appid": app_id, "query": query, "results": min(limit, 50), "sort": "+price"},
-                headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12"},
-            )
-            _yahoo_last_request_at = asyncio.get_running_loop().time()
-            if response.status_code == 429:
-                retry_after = response.headers.get("Retry-After")
-                try:
-                    delay = min(float(retry_after), 5.0) if retry_after else 1.1
-                except ValueError:
-                    delay = 1.1
-                await asyncio.sleep(delay)
-                response = await client.get(
+        async with safe_async_client(timeout=15.0) as client:
+            async def request():
+                async with client.stream(
+                    "GET",
                     YAHOO_API_URL,
                     params={"appid": app_id, "query": query, "results": min(limit, 50), "sort": "+price"},
                     headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12"},
-                )
-                _yahoo_last_request_at = asyncio.get_running_loop().time()
-            response.raise_for_status()
-            if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
-                raise ValueError("Yahoo API response is too large")
-            payload = response.json()
+                ) as response:
+                    _yahoo_last_request_at = asyncio.get_running_loop().time()
+                    if response.status_code == 429:
+                        retry_after = response.headers.get("Retry-After")
+                        try:
+                            delay = min(float(retry_after), 5.0) if retry_after else 1.1
+                        except ValueError:
+                            delay = 1.1
+                        return response.status_code, None, delay
+                    response.raise_for_status()
+                    body = await read_response_bytes(response, MAX_SEARCH_RESPONSE_BYTES)
+                    return response.status_code, json.loads(body.decode("utf-8")), 0.0
+
+            status, payload, delay = await request()
+            if status == 429:
+                await asyncio.sleep(delay)
+                status, payload, _ = await request()
+                if status == 429:
+                    raise httpx.HTTPStatusError("Yahoo Shopping API rate limit", request=None, response=None)
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid Yahoo Shopping API response")
     hits = payload.get("hits", [])
     if not isinstance(hits, list):
         raise ValueError("Invalid Yahoo Shopping API response")
     return [_yahoo_item(item) for item in hits[:limit] if isinstance(item, dict)]
-
 
 def _links(html: str, marketplace: str) -> list[str]:
     soup = BeautifulSoup(html, "html.parser")
@@ -546,26 +549,25 @@ def _links(html: str, marketplace: str) -> list[str]:
 async def _search_marketplace(marketplace: str, query: str, limit: int) -> list[str]:
     url = SEARCH_URLS[marketplace].format(query=quote_plus(query))
     current_url = await validate_public_url(url)
-    async with httpx.AsyncClient(
+    async with safe_async_client(
         follow_redirects=False,
         timeout=15.0,
         headers={"User-Agent": "EC-Pulse/0.1 (+https://ec-pulse-api.vercel.app)"},
     ) as client:
         for _ in range(MAX_REDIRECTS + 1):
-            response = await client.get(current_url)
-            if response.is_redirect or response.is_permanent_redirect:
-                location = response.headers.get("location")
-                if not location:
-                    raise ValueError("Redirect response did not include a location")
-                current_url = await validate_public_url(next_redirect(current_url, location))
-                continue
-            response.raise_for_status()
-            break
+            async with client.stream("GET", current_url) as response:
+                if response.is_redirect or response.is_permanent_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("Redirect response did not include a location")
+                    current_url = await validate_public_url(next_redirect(current_url, location))
+                    continue
+                response.raise_for_status()
+                body = await read_response_bytes(response, MAX_SEARCH_RESPONSE_BYTES)
+                break
         else:
             raise ValueError("Too many redirects")
-    if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
-        raise ValueError("Marketplace search response is too large")
-    return _links(response.text, marketplace)[:limit]
+    return _links(body.decode("utf-8"), marketplace)[:limit]
 
 
 async def search_products(query: str, marketplaces: list[str], limit: int) -> dict:
