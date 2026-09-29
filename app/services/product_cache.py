@@ -42,7 +42,6 @@ async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, 
     cache_key = _key(url)
 
     with psycopg.connect(_db_url()) as conn:
-        _init(conn)
         row = conn.execute(
             "SELECT payload FROM product_cache WHERE cache_key = %s AND expires_at > %s",
             (cache_key, now),
@@ -51,7 +50,8 @@ async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, 
             return row[0], True
 
     payload = await fetch_product(url)
-    expires_at = now + timedelta(seconds=ttl_seconds)
+    captured_at = datetime.now(timezone.utc)
+    expires_at = captured_at + timedelta(seconds=ttl_seconds)
 
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
@@ -65,7 +65,7 @@ async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, 
                 captured_at = EXCLUDED.captured_at,
                 expires_at = EXCLUDED.expires_at
             """,
-            (cache_key, url, json.dumps(payload), now, expires_at),
+            (cache_key, url, json.dumps(payload), captured_at, expires_at),
         )
         conn.commit()
     return payload, False
