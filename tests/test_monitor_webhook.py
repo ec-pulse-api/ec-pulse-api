@@ -31,3 +31,13 @@ def test_webhook_failures_are_scheduled_for_retry():
     assert "next_attempt_at" in source
     assert "2 ** min(attempts - 1, 6)" in source
     assert "min(3600" in source
+
+
+def test_monitor_results_require_active_lease_before_persisting():
+    source = inspect.getsource(monitor_store.run_due_monitors)
+    assert "AND lease_token = %s" in source
+    assert "AND locked_until > CURRENT_TIMESTAMP" in source
+    assert "FOR UPDATE" in source
+    lease_check = source.index("lease_owned =")
+    history_insert = source.index("INSERT INTO price_history")
+    assert lease_check < history_insert
