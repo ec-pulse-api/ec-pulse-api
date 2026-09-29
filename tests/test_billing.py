@@ -53,6 +53,14 @@ def test_past_due_subscription_keeps_plan_during_retry(monkeypatch):
     assert conn.last_params[0] == "pro"
 
 
+def test_canceled_subscription_clears_cancel_at_period_end(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    conn = FakeConn()
+    assert _apply_subscription(conn, {**_subscription("canceled"), "cancel_at_period_end": True}, 100) is True
+    assert conn.updates == 1
+    assert conn.last_params[5] is True
+
+
 def test_canceled_subscription_downgrades_to_free(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
     conn = FakeConn()
