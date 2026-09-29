@@ -103,6 +103,14 @@ def _usage_headers(request: Request, api_key: str, result: dict | None = None) -
     except Exception:
         return {}
 
+async def _validate_urls(urls: list[str]) -> None:
+    for url in urls:
+        try:
+            await validate_public_url(url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid public URL: {exc}") from exc
+
+
 async def _fetch_product_or_http_error(url: str):
     try:
         payload,cache_hit=await fetch_product_cached(url)
@@ -183,6 +191,7 @@ def consumer_insights(request: ConsumerInsightRequest, api_key: str = Depends(ge
 
 @app.post("/v1/research/ingest")
 async def research_ingest(request: ResearchUrlRequest, api_key: str = Depends(get_api_key)):
+    await _validate_urls([str(url) for url in request.urls])
     charge = _charge(api_key, "POST /v1/research/ingest", len(request.urls))
     results = []
     for url in request.urls:
@@ -264,12 +273,14 @@ async def research_opportunity(run_id: str, request_http: Request, response: Res
 
 @app.get("/v1/products")
 async def product_get(request:Request,response:Response,url:HttpUrl=Query(...),api_key:str=Depends(get_api_key)):
+    await _validate_urls([str(url)])
     charge=_charge(api_key,"GET /v1/products")
     for k,v in _usage_headers(request,api_key,charge).items(): response.headers[k]=v
     return await _fetch_product_or_http_error(str(url))
 
 @app.post("/v1/products")
 async def product_post(request_http:Request,response:Response,request:ProductRequest,api_key:str=Depends(get_api_key)):
+    await _validate_urls([str(request.url)])
     charge=_charge(api_key,"POST /v1/products")
     for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
     return await _fetch_product_or_http_error(str(request.url))
@@ -278,6 +289,7 @@ async def product_post(request_http:Request,response:Response,request:ProductReq
 async def product_search(request_http:Request,response:Response,request:ProductSearchRequest,api_key:str=Depends(get_api_key)):
     marketplaces=[m.lower() for m in request.marketplaces]
     if any(m not in {"amazon","rakuten","yahoo"} for m in marketplaces): raise HTTPException(status_code=400,detail="marketplaces must contain only amazon, rakuten, yahoo")
+    if len(set(marketplaces)) != len(marketplaces): raise HTTPException(status_code=400,detail="marketplaces must not contain duplicates")
     charge=_charge(api_key,"POST /v1/products/search",request.limit*len(marketplaces))
     for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
     try: return await search_products(request.query,marketplaces,request.limit)
@@ -285,7 +297,9 @@ async def product_search(request_http:Request,response:Response,request:ProductS
 
 @app.post("/v1/products/compare")
 async def product_compare(request_http:Request,response:Response,request:ProductCompareRequest,api_key:str=Depends(get_api_key)):
-    urls=[str(u) for u in request.urls]; charge=_charge(api_key,"POST /v1/products/compare",len(urls))
+    urls=[str(u) for u in request.urls]
+    await _validate_urls(urls)
+    charge=_charge(api_key,"POST /v1/products/compare",len(urls))
     for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
     results=await asyncio.gather(*(fetch_product_cached(url) for url in urls),return_exceptions=True)
     products=[]
@@ -299,6 +313,7 @@ async def product_compare(request_http:Request,response:Response,request:Product
 @app.post("/v1/monitors")
 async def monitor(request_http:Request,response:Response,request:MonitorRequest,api_key:str=Depends(get_api_key)):
     try:
+        await validate_public_url(str(request.url))
         await validate_public_url(str(request.webhook_url))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid webhook URL: {exc}") from exc
