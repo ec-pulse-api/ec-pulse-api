@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import httpx
 import psycopg
 
-from app.services.url_safety import validate_public_url
+from app.services.url_safety import safe_async_client, validate_public_url
 
 _INIT_LOCK = Lock()
 _SCHEMA_READY = False
@@ -483,7 +483,7 @@ async def run_due_monitors() -> dict:
         _init(conn); rows = conn.execute("""SELECT id, url, interval_minutes, webhook_url, last_price, last_checked_at FROM monitors
             WHERE last_checked_at IS NULL OR last_checked_at <= %s - (interval_minutes * INTERVAL '1 minute')""", (now,)).fetchall()
     checked = changed = failed = 0
-    async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+    async with safe_async_client(timeout=10, follow_redirects=False) as client:
         for monitor_id, url, interval, webhook_url, old_price, last_checked_at in rows:
             lease_token = str(uuid.uuid4())
             try:
@@ -506,7 +506,7 @@ async def run_due_monitors() -> dict:
                 if old_price is not None and new_price is not None and new_price != old_price:
                     event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"ec-pulse:monitor:{monitor_id}:{last_checked_at.isoformat() if last_checked_at else 'initial'}:{old_price}:{new_price}"))
                     event = {"event": "price_changed", "event_id": event_id, "monitor_id": monitor_id, "old_price": old_price, "new_price": new_price, "change_amount": round(new_price-old_price,2), "change_percent": round(((new_price-old_price)/old_price)*100,2) if old_price else None, "direction": "down" if new_price < old_price else "up", "currency": currency, "url": url, "source": {"site": source.get("site"), "url": source_url}, "captured_at": data["captured_at"]}
-                    response = await client.post(webhook_url, json=event, headers={"X-EC-Pulse-Event-ID": event_id}); response.raise_for_status(); changed += 1
+                    async with client.stream("POST", webhook_url, json=event, headers={"X-EC-Pulse-Event-ID": event_id}) as response:\n                        response.raise_for_status()\n                    changed += 1
                 with psycopg.connect(_db_url()) as conn:
                     conn.execute("INSERT INTO price_history (monitor_id, price, currency, captured_at, source_url) VALUES (%s, %s, %s, %s, %s)", (monitor_id, new_price, currency, data["captured_at"], source_url))
                     conn.execute("UPDATE monitors SET last_price = %s, last_checked_at = %s WHERE id = %s", (new_price, now, monitor_id)); conn.commit()
