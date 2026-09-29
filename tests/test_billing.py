@@ -228,7 +228,7 @@ def test_checkout_holds_account_lock_through_stripe_call(monkeypatch):
         def create(**kwargs):
             assert conn.closed is False
             assert conn.committed is False
-            return {"url": "https://checkout.example/session"}
+            return type("Session", (), {"url": "https://checkout.example/session"})()
 
     class FakeStripe:
         checkout = type("CheckoutContainer", (), {"Session": Checkout})
