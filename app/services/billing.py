@@ -169,15 +169,21 @@ def process_webhook(payload: bytes, signature: str) -> dict:
             checkout_key = metadata.get("checkout_pending_key")
             if customer_id and api_key_hash and checkout_key:
                 pending = conn.execute(
-                    "SELECT checkout_pending_key, stripe_customer_id FROM api_accounts WHERE api_key_hash=%s FOR UPDATE",
+                    "SELECT checkout_pending_key, checkout_pending_until, stripe_customer_id FROM api_accounts WHERE api_key_hash=%s FOR UPDATE",
                     (api_key_hash,),
                 ).fetchone()
                 if not pending:
                     return {"ok": True, "duplicate": False, "event_id": event_id, "type": event_type, "handled": False}
                 pending_key_matches = pending[0] == checkout_key
-                customer_matches = pending[1] is None or pending[1] == customer_id
+                pending_active = pending[1] is not None and pending[1] > now
+                customer_matches = pending[2] is None or pending[2] == customer_id
                 if not customer_matches:
                     # A stale Checkout Session must not replace a customer linked by a newer checkout.
+                    return {"ok": True, "duplicate": False, "event_id": event_id, "type": event_type, "handled": False}
+                if not pending_key_matches and pending_active:
+                    # A newer Checkout is still within its recovery window. The old
+                    # completed session must not claim the account before the newer
+                    # session finishes or expires.
                     return {"ok": True, "duplicate": False, "event_id": event_id, "type": event_type, "handled": False}
                 if pending_key_matches:
                     conn.execute(
