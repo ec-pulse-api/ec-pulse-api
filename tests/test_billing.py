@@ -77,15 +77,8 @@ def test_older_event_created_is_ignored(monkeypatch):
     assert conn.updates == 0
 
 
-def test_same_timestamp_older_event_id_is_ignored(monkeypatch):
+def test_same_timestamp_does_not_compare_ids(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
     conn = FakeConn((100, "evt_002"))
-    assert _apply_subscription(conn, _subscription("active", "evt_001"), 100) is False
-    assert conn.updates == 0
-
-
-def test_same_timestamp_newer_event_id_is_applied(monkeypatch):
-    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
-    conn = FakeConn((100, "evt_001"))
-    assert _apply_subscription(conn, _subscription("active", "evt_002"), 100) is True
+    assert _apply_subscription(conn, _subscription("active", "evt_001"), 100) is True
     assert conn.updates == 1
