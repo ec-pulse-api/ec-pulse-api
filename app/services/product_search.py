@@ -692,16 +692,19 @@ async def _search_rakuten_official(query: str, limit: int) -> list[dict]:
     access_key = os.getenv("RAKUTEN_ACCESS_KEY")
     if not app_id or not access_key:
         raise RuntimeError("Rakuten API credentials are not configured")
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(
+    async with safe_async_client(timeout=15.0) as client:
+        async with client.stream(
+            "GET",
             RAKUTEN_API_URL,
             params={"applicationId": app_id, "format": "json", "formatVersion": 2, "keyword": query, "hits": min(limit, 30), "sort": "+itemPrice"},
             headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12", "accessKey": access_key},
-        )
-        response.raise_for_status()
-        if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
-            raise ValueError("Rakuten API response is too large")
-        payload = response.json()
+        ) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length and content_length.isdigit() and int(content_length) > MAX_SEARCH_RESPONSE_BYTES:
+                raise ValueError("Rakuten API response is too large")
+            response.raise_for_status()
+            body = await read_response_bytes(response, MAX_SEARCH_RESPONSE_BYTES)
+    payload = json.loads(body.decode("utf-8"))
     items = payload.get("items", [])
     if not isinstance(items, list):
         raise ValueError("Invalid Rakuten API response")
