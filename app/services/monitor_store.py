@@ -286,6 +286,49 @@ def create_monitor(api_key: str, url: str, interval_minutes: int, webhook_url: s
         conn.execute("INSERT INTO monitors (id, owner_key_hash, url, interval_minutes, webhook_url, created_at) VALUES (%s, %s, %s, %s, %s, %s)", (monitor_id, owner, url, interval_minutes, webhook_url, now)); conn.commit()
     return {"id": monitor_id, "url": url, "interval_minutes": interval_minutes, "webhook_url": webhook_url, "status": "active", "created_at": now.isoformat()}
 
+def create_monitor_with_credit(api_key: str, url: str, interval_minutes: int, webhook_url: str, endpoint: str) -> tuple[dict, dict]:
+    """Create a monitor and consume its creation credit in one DB transaction."""
+    now = datetime.now(timezone.utc)
+    monitor_id = str(uuid.uuid4())
+    key_hash = _account_hash(api_key)
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        row = conn.execute(
+            """SELECT a.api_key_hash, a.credits_balance
+               FROM api_accounts a
+               JOIN api_keys k ON k.account_key_hash = a.api_key_hash
+               WHERE k.api_key_hash = %s AND k.active = TRUE
+               FOR UPDATE OF k, a""",
+            (key_hash,),
+        ).fetchone()
+        if not row:
+            raise RuntimeError("Invalid or revoked API key")
+        account_hash, balance = row
+        if balance < 1:
+            raise RuntimeError("Insufficient API credits")
+        remaining = balance - 1
+        conn.execute(
+            "UPDATE api_accounts SET credits_balance = %s, updated_at = %s WHERE api_key_hash = %s",
+            (remaining, now, account_hash),
+        )
+        conn.execute(
+            "UPDATE api_keys SET last_used_at = %s WHERE api_key_hash = %s",
+            (now, key_hash),
+        )
+        conn.execute(
+            "INSERT INTO api_usage (api_key_hash, endpoint, credits, created_at) VALUES (%s, %s, %s, %s)",
+            (key_hash, endpoint, 1, now),
+        )
+        conn.execute(
+            "INSERT INTO monitors (id, owner_key_hash, url, interval_minutes, webhook_url, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            (monitor_id, account_hash, url, interval_minutes, webhook_url, now),
+        )
+        conn.commit()
+    return (
+        {"id": monitor_id, "url": url, "interval_minutes": interval_minutes, "webhook_url": webhook_url, "status": "active", "created_at": now.isoformat()},
+        {"credits_used": 1, "credits_remaining": remaining},
+    )
+
 def list_monitors(api_key: str) -> list[dict]:
     owner = _account_hash(api_key)
     with psycopg.connect(_db_url()) as conn:
