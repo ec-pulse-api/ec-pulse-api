@@ -269,6 +269,8 @@ def test_checkout_uses_owning_account_hash_in_metadata(monkeypatch):
         @staticmethod
         def create(**kwargs):
             assert kwargs["metadata"]["api_key_hash"] == "account-hash"
+            assert kwargs["metadata"]["checkout_pending_key"]
+
             return type("Session", (), {"url": "https://checkout.example/session"})()
 
     class FakeStripe:
@@ -312,3 +314,56 @@ def test_checkout_rejects_existing_pending_checkout(monkeypatch):
         assert "checkout is already in progress" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_stale_checkout_completion_cannot_clear_new_pending_checkout(monkeypatch):
+    import app.services.billing as billing
+
+    class Event:
+        def to_dict_recursive(self):
+            return {
+                "id": "evt_checkout_old",
+                "type": "checkout.session.completed",
+                "created": 200,
+                "data": {"object": {
+                    "customer": "cus_old",
+                    "subscription": "sub_old",
+                    "metadata": {"api_key_hash": "account-hash", "checkout_pending_key": "old-key"},
+                }},
+            }
+
+    class Webhook:
+        @staticmethod
+        def construct_event(payload, signature, secret):
+            return Event()
+
+    class FakeStripe:
+        Webhook = Webhook
+
+    class Cursor:
+        def __init__(self, row): self.row = row
+        def fetchone(self): return self.row
+
+    class Conn:
+        def __init__(self): self.updates = 0
+        def execute(self, sql, params=()):
+            if "INSERT INTO billing_events" in sql:
+                return Cursor(("evt_checkout_old",))
+            if "SELECT checkout_pending_key" in sql:
+                return Cursor(("new-key",))
+            self.updates += 1
+            return Cursor(None)
+        def commit(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    conn = Conn()
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: conn)
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+
+    result = billing.process_webhook(b"payload", "sig")
+    assert result["handled"] is False
+    assert conn.updates == 0
