@@ -26,9 +26,6 @@ _yahoo_last_request_at = 0.0
 _AMAZON_TOKEN_LOCK = asyncio.Lock()
 _amazon_access_token: str | None = None
 _amazon_token_expires_at = 0.0
-_YAHOO_REQUEST_LOCK = asyncio.Lock()
-_YAHOO_MIN_INTERVAL_SECONDS = 1.05
-_yahoo_last_request_at = 0.0
 
 
 async def _amazon_token() -> str:
