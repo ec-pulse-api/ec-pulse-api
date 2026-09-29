@@ -743,12 +743,12 @@ async def run_due_monitors() -> dict:
             with psycopg.connect(_db_url()) as conn:
                 _init(conn)
                 lease_owned = conn.execute(
-                    """SELECT 1
-                    FROM monitor_run_leases
+                    """UPDATE monitor_run_leases
+                    SET locked_until = CURRENT_TIMESTAMP + INTERVAL '10 minutes'
                     WHERE monitor_id = %s
                       AND lease_token = %s
                       AND locked_until > CURRENT_TIMESTAMP
-                    FOR UPDATE""",
+                    RETURNING lease_token""",
                     (monitor_id, lease_token),
                 ).fetchone()
                 if not lease_owned:
