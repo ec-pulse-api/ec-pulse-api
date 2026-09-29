@@ -4,6 +4,7 @@ import socket
 from urllib.parse import urljoin, urlparse
 
 MAX_REDIRECTS = 5
+MAX_URL_LENGTH = 2048
 _ALLOWED_PORTS = {80, 443}
 
 
@@ -20,12 +21,19 @@ def _blocked_ip(address: str) -> bool:
 
 
 async def validate_public_url(url: str) -> str:
-    parsed = urlparse(url)
+    if len(url) > MAX_URL_LENGTH:
+        raise ValueError("URL is too long")
+    try:
+        parsed = urlparse(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Invalid URL") from exc
+
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("A valid public http(s) URL is required")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("URL credentials are not allowed")
-    if parsed.port not in (None, *_ALLOWED_PORTS):
+    if port not in (None, *_ALLOWED_PORTS):
         raise ValueError("Only ports 80 and 443 are allowed")
 
     host = parsed.hostname
@@ -33,7 +41,7 @@ async def validate_public_url(url: str) -> str:
         addresses = await asyncio.to_thread(
             socket.getaddrinfo,
             host,
-            parsed.port or (443 if parsed.scheme == "https" else 80),
+            port or (443 if parsed.scheme == "https" else 80),
             type=socket.SOCK_STREAM,
         )
     except OSError as exc:
