@@ -11,7 +11,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, constr, HttpUrl
 
 from app.services.billing import cancel_subscription, create_checkout, create_customer_portal, process_webhook
-from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity, list_research_runs
+from app.services.monitor_store import consume_credit, create_monitor, create_monitor_with_credit, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity, list_research_runs
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
@@ -347,10 +347,24 @@ async def monitor(request_http:Request,response:Response,request:MonitorRequest,
         await validate_public_url(str(request.webhook_url))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid monitor or webhook URL: {exc}") from exc
-    charge=_charge(api_key,"POST /v1/monitors")
-    for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
-    try: return create_monitor(api_key=api_key,url=str(request.url),interval_minutes=request.interval_minutes,webhook_url=str(request.webhook_url))
-    except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
+    try:
+        result, charge = create_monitor_with_credit(
+            api_key=api_key,
+            url=str(request.url),
+            interval_minutes=request.interval_minutes,
+            webhook_url=str(request.webhook_url),
+            endpoint="POST /v1/monitors",
+        )
+        for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
+        result["credits"] = charge
+        return result
+    except RuntimeError as exc:
+        message = str(exc)
+        if "Insufficient API credits" in message:
+            raise HTTPException(status_code=402, detail=message) from exc
+        if "Invalid or revoked API key" in message:
+            raise HTTPException(status_code=401, detail=message) from exc
+        raise HTTPException(status_code=503, detail=message) from exc
 
 @app.get("/v1/monitors")
 def monitors(api_key:str=Depends(get_api_key)):
