@@ -357,7 +357,7 @@ def test_stale_checkout_completion_cannot_clear_new_pending_checkout(monkeypatch
             if "INSERT INTO billing_events" in sql:
                 return Cursor(("evt_checkout_old",))
             if "SELECT checkout_pending_key" in sql:
-                return Cursor(("new-key", "cus_new"))
+                return Cursor(("new-key", datetime.now(timezone.utc) + timedelta(minutes=5), "cus_new"))
             self.updates += 1
             return Cursor(None)
         def commit(self): pass
@@ -476,7 +476,7 @@ def test_expired_checkout_completion_still_links_customer_and_subscription(monke
             if "INSERT INTO billing_events" in sql:
                 return Cursor(("evt_checkout_expired",))
             if "SELECT checkout_pending_key" in sql:
-                return Cursor(("newer-key", None))
+                return Cursor(("newer-key", datetime.now(timezone.utc) - timedelta(minutes=1), None))
             if "SELECT api_key_hash" in sql:
                 return Cursor(("account-hash",))
             if "SELECT stripe_subscription_id, subscription_status" in sql:
