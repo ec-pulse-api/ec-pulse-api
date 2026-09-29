@@ -337,8 +337,7 @@ def test_stale_checkout_completion_cannot_clear_new_pending_checkout(monkeypatch
         def construct_event(payload, signature, secret):
             return Event()
 
-    class FakeStripe:
-        Webhook = Webhook
+    FakeStripe = type("FakeStripe", (), {"Webhook": Webhook})
 
     class Cursor:
         def __init__(self, row): self.row = row
