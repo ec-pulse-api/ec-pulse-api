@@ -15,14 +15,29 @@ def _blocked_ip(address: str) -> bool:
     shared = ipaddress.ip_network("100.64.0.0/10")
     return (
         ip in shared
-        or
-        ip.is_private
+        or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
     )
+
+
+def _resolve_public_addresses(host: str, port: int) -> set[str]:
+    try:
+        addresses = socket.getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError as exc:
+        raise ValueError("Unable to resolve the URL host") from exc
+
+    resolved = {item[4][0] for item in addresses if item[4]}
+    if not resolved or any(_blocked_ip(address) for address in resolved):
+        raise ValueError("Private or local network URLs are not allowed")
+    return resolved
 
 
 async def validate_public_url(url: str) -> str:
@@ -41,23 +56,67 @@ async def validate_public_url(url: str) -> str:
     if port not in (None, *_ALLOWED_PORTS):
         raise ValueError("Only ports 80 and 443 are allowed")
 
-    host = parsed.hostname
-    try:
-        addresses = await asyncio.to_thread(
-            socket.getaddrinfo,
-            host,
-            port or (443 if parsed.scheme == "https" else 80),
-            type=socket.SOCK_STREAM,
-        )
-    except OSError as exc:
-        raise ValueError("Unable to resolve the URL host") from exc
-
-    resolved = {item[4][0] for item in addresses if item[4]}
-    if not resolved or any(_blocked_ip(address) for address in resolved):
-        raise ValueError("Private or local network URLs are not allowed")
-
+    await asyncio.to_thread(
+        _resolve_public_addresses,
+        parsed.hostname,
+        port or (443 if parsed.scheme == "https" else 80),
+    )
     return url
 
 
 def next_redirect(base_url: str, location: str) -> str:
     return urljoin(base_url, location)
+
+
+def safe_async_transport():
+    """
+    Build an httpx transport that re-resolves the destination immediately
+    before each new TCP connection and refuses private/local destinations.
+
+    The HTTP Host header and TLS SNI remain the original hostname because
+    httpcore performs TLS after the TCP connection is established.
+    """
+    import httpcore
+    import httpx
+
+    class _SafeNetworkBackend(httpcore.AsyncNetworkBackend):
+        def __init__(self) -> None:
+            self._backend = httpcore.AutoBackend()
+
+        async def connect_tcp(
+            self,
+            host: str,
+            port: int,
+            timeout: float | None = None,
+            local_address: str | None = None,
+            socket_options=None,
+        ):
+            resolved = await asyncio.to_thread(_resolve_public_addresses, host, port)
+            target = next(iter(sorted(resolved)))
+            return await self._backend.connect_tcp(
+                target,
+                port,
+                timeout=timeout,
+                local_address=local_address,
+                socket_options=socket_options,
+            )
+
+        async def connect_unix_socket(self, path: str, timeout: float | None = None, socket_options=None):
+            raise ValueError("Unix socket connections are not allowed")
+
+        async def sleep(self, seconds: float) -> None:
+            await self._backend.sleep(seconds)
+
+    transport = httpx.AsyncHTTPTransport(trust_env=False)
+    transport._pool._network_backend = _SafeNetworkBackend()
+    return transport
+
+
+def safe_async_client(**kwargs):
+    import httpx
+
+    return httpx.AsyncClient(
+        transport=safe_async_transport(),
+        trust_env=False,
+        **kwargs,
+    )
