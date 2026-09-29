@@ -69,17 +69,11 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
     row = _account_by_customer(conn, customer_id) if customer_id else None
     if not row:
         return False
-    state = conn.execute("SELECT last_stripe_event_created, last_stripe_event_id FROM api_accounts WHERE api_key_hash = %s", (row[0],)).fetchone()
     event_id = subscription.get("_ec_pulse_event_id")
-    if event_created is not None and state and state[0] is not None:
-        previous_created, previous_event_id = state
-        if event_created < previous_created:
-            return False
-        if event_created == previous_created and previous_event_id and event_id and event_id <= previous_event_id:
-            return False
-    if plan:
+    effective_plan = plan if status in {"active", "trialing", "past_due"} else None
+    if effective_plan:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
-            current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, event_id, datetime.now(timezone.utc), row[0]))
+            current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, event_id, datetime.now(timezone.utc), row[0]))
     else:
         conn.execute("""UPDATE api_accounts SET stripe_subscription_id=%s, subscription_status=%s,
             current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, event_id, datetime.now(timezone.utc), row[0]))
@@ -106,10 +100,16 @@ def process_webhook(payload: bytes, signature: str) -> dict:
         obj = event_data.get("data", {}).get("object", {})
         handled = False
         if event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
-            obj = {**obj, "_ec_pulse_event_id": event_id}
-            handled = _apply_subscription(conn, obj, event_data.get("created"))
-            if event_type == "customer.subscription.deleted" and handled:
-                conn.execute("UPDATE api_accounts SET plan='free', subscription_status='canceled', updated_at=%s WHERE stripe_subscription_id=%s", (now, obj.get("id")))
+            subscription_id = obj.get("id")
+            current = obj
+            if subscription_id:
+                try:
+                    current = sdk.Subscription.retrieve(subscription_id).to_dict_recursive()
+                except Exception as exc:
+                    if event_type != "customer.subscription.deleted":
+                        raise RuntimeError("Unable to retrieve Stripe subscription") from exc
+            current = {**current, "_ec_pulse_event_id": event_id}
+            handled = _apply_subscription(conn, current, event_data.get("created"))
         elif event_type == "checkout.session.completed":
             customer_id = obj.get("customer")
             api_key_hash = (obj.get("metadata") or {}).get("api_key_hash")
