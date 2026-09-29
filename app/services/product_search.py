@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from urllib.parse import quote_plus
 
@@ -14,6 +15,42 @@ SEARCH_URLS = {
     "rakuten": "https://search.rakuten.co.jp/search/mall/{query}/",
     "yahoo": "https://shopping.yahoo.co.jp/search?p={query}",
 }
+
+
+YAHOO_API_URL = "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
+
+
+def _yahoo_item(item: dict) -> dict:
+    review = item.get("review") if isinstance(item.get("review"), dict) else {}
+    seller = item.get("seller") if isinstance(item.get("seller"), dict) else {}
+    image = item.get("image") if isinstance(item.get("image"), dict) else {}
+    price = item.get("price")
+    return {
+        "url": item.get("url"),
+        "cache_hit": False,
+        "product": {
+            "product": {"title": item.get("name"), "brand": (item.get("brand") or {}).get("name") if isinstance(item.get("brand"), dict) else item.get("brand"), "model": None, "sku": item.get("code"), "gtin": item.get("janCode"), "product_id": item.get("code") or item.get("janCode")},
+            "pricing": {"price": float(price) if isinstance(price, (int, float)) else None, "list_price": None, "currency": "JPY"},
+            "availability": {"status": "InStock" if item.get("inStock") else "OutOfStock"},
+            "rating": {"score": review.get("rate"), "count": review.get("count", 0)},
+            "seller": {"name": seller.get("name")},
+            "source": {"site": "shopping.yahoo.co.jp", "marketplace": "yahoo", "product_id": item.get("code") or item.get("janCode"), "url": item.get("url"), "image": image.get("medium")},
+        },
+    }
+
+
+async def _search_yahoo_official(query: str, limit: int) -> list[dict]:
+    app_id = os.getenv("YAHOO_SHOPPING_APP_ID")
+    if not app_id:
+        raise RuntimeError("YAHOO_SHOPPING_APP_ID is not configured")
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(YAHOO_API_URL, params={"appid": app_id, "query": query, "results": min(limit, 50), "sort": "+price"}, headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12"})
+        response.raise_for_status()
+        payload = response.json()
+    hits = payload.get("hits", [])
+    if not isinstance(hits, list):
+        raise ValueError("Invalid Yahoo Shopping API response")
+    return [_yahoo_item(item) for item in hits[:limit] if isinstance(item, dict)]
 
 
 def _links(html: str, marketplace: str) -> list[str]:
@@ -70,13 +107,13 @@ async def _search_marketplace(marketplace: str, query: str, limit: int) -> list[
 
 
 async def search_products(query: str, marketplaces: list[str], limit: int) -> dict:
-    urls_by_marketplace = await asyncio.gather(
-        *(_search_marketplace(marketplace, query, limit) for marketplace in marketplaces),
+    results_by_marketplace = await asyncio.gather(
+        *(_search_yahoo_official(query, limit) if marketplace == "yahoo" and os.getenv("YAHOO_SHOPPING_APP_ID") else _search_marketplace(marketplace, query, limit) for marketplace in marketplaces),
         return_exceptions=True,
     )
 
     candidates = []
-    for marketplace, result in zip(marketplaces, urls_by_marketplace):
+    for marketplace, result in zip(marketplaces, results_by_marketplace):
         if isinstance(result, Exception):
             candidates.append({
                 "marketplace": marketplace,
@@ -84,6 +121,10 @@ async def search_products(query: str, marketplaces: list[str], limit: int) -> di
                 "error": type(result).__name__,
                 "results": [],
             })
+            continue
+
+        if marketplace == "yahoo" and os.getenv("YAHOO_SHOPPING_APP_ID"):
+            candidates.append({"marketplace": marketplace, "ok": True, "results": result})
             continue
 
         product_results = await asyncio.gather(
