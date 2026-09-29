@@ -1,7 +1,7 @@
 import re
 from urllib.parse import urlparse
 
-from app.services.url_safety import MAX_REDIRECTS, next_redirect, validate_public_url
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, safe_async_client, validate_public_url
 
 import httpx
 from bs4 import BeautifulSoup
@@ -89,7 +89,7 @@ async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
         "Accept-Language": "ja,en;q=0.8",
     }
 
-    async with httpx.AsyncClient(timeout=15, follow_redirects=False, headers=headers) as client:
+    async with safe_async_client(timeout=15, follow_redirects=False, headers=headers) as client:
         for _ in range(MAX_REDIRECTS + 1):
             response = await client.get(current_url)
             content_length = response.headers.get("Content-Length")
