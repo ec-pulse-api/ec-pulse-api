@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 from urllib.parse import quote_plus, urlparse
@@ -7,7 +8,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.services.product_cache import fetch_product_cached
-from app.services.url_safety import MAX_REDIRECTS, next_redirect, safe_async_client, validate_public_url
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, read_response_bytes, safe_async_client, validate_public_url
 
 
 SEARCH_URLS = {
@@ -137,39 +138,42 @@ async def _search_amazon_official(query: str, limit: int) -> list[dict]:
             "offersV2.listings.merchantInfo",
         ],
     }
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(
-            AMAZON_API_URL,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "x-marketplace": "www.amazon.co.jp",
-            },
-            json=payload,
-        )
-        if response.status_code == 401:
-            _amazon_access_token = None
-            _amazon_token_expires_at = 0.0
-            token = await _amazon_token()
-            response = await client.post(
+
+    async def request(current_token: str) -> tuple[int, dict]:
+        async with safe_async_client(timeout=15.0) as client:
+            async with client.stream(
+                "POST",
                 AMAZON_API_URL,
                 headers={
-                    "Authorization": f"Bearer {token}",
+                    "Authorization": f"Bearer {current_token}",
                     "Content-Type": "application/json",
                     "x-marketplace": "www.amazon.co.jp",
                 },
                 json=payload,
-            )
-        response.raise_for_status()
-        if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
-            raise ValueError("Amazon API response is too large")
-        data = response.json()
+            ) as response:
+                status = response.status_code
+                response.raise_for_status()
+                body = await read_response_bytes(response, MAX_SEARCH_RESPONSE_BYTES)
+        data = json.loads(body.decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("Invalid Amazon Creators API response")
+        return status, data
+
+    try:
+        status, data = await request(token)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 401:
+            raise
+        _amazon_access_token = None
+        _amazon_token_expires_at = 0.0
+        token = await _amazon_token()
+        status, data = await request(token)
+
     result = data.get("searchResult") if isinstance(data.get("searchResult"), dict) else {}
     items = result.get("items", [])
     if not isinstance(items, list):
         raise ValueError("Invalid Amazon Creators API response")
     return [_amazon_item(item) for item in items[:limit] if isinstance(item, dict)]
-
 
 def _yahoo_item(item: dict) -> dict:
     review = item.get("review") if isinstance(item.get("review"), dict) else {}
