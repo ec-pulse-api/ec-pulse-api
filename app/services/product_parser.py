@@ -10,6 +10,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 USER_AGENT = "EC-Pulse/0.1 (+https://ec-pulse-api.vercel.app)"
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 MARKETPLACES = {
     "amazon.co.jp": "amazon",
@@ -105,6 +106,9 @@ async def fetch_product(url: str) -> dict[str, Any]:
     ) as client:
         for _ in range(MAX_REDIRECTS + 1):
             response = await client.get(current_url)
+            content_length = response.headers.get("Content-Length")
+            if content_length and content_length.isdigit() and int(content_length) > MAX_RESPONSE_BYTES:
+                raise ValueError("Product page response is too large")
             if response.is_redirect or response.is_permanent_redirect:
                 location = response.headers.get("location")
                 if not location:
@@ -116,6 +120,8 @@ async def fetch_product(url: str) -> dict[str, Any]:
         else:
             raise ValueError("Too many redirects")
 
+    if len(response.content) > MAX_RESPONSE_BYTES:
+        raise ValueError("Product page response is too large")
     soup = BeautifulSoup(response.text, "html.parser")
     product = _find_product(_jsonld(soup)) or {}
     offers = _offers_dict(product.get("offers"))
