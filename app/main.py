@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, constr, HttpUrl
 
 from app.services.billing import create_checkout, create_customer_portal, process_webhook
 from app.services.monitor_store import consume_credit, create_monitor, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity, list_research_runs
@@ -47,7 +47,7 @@ class ProductSearchRequest(BaseModel):
     marketplaces: list[str] = Field(default=["amazon", "rakuten", "yahoo"], min_length=1, max_length=3)
     limit: int = Field(default=5, ge=1, le=10)
 class ConsumerInsightRequest(BaseModel):
-    comments: list[str] = Field(min_length=1, max_length=5000)
+    comments: list[constr(max_length=2000)] = Field(min_length=1, max_length=5000)
     source: str | None = Field(default=None, max_length=50)
 class ResearchUrlRequest(BaseModel):
     urls: list[HttpUrl] = Field(min_length=1, max_length=20)
