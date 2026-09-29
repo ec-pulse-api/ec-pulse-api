@@ -43,6 +43,18 @@ def test_monitor_results_require_active_lease_before_persisting():
     assert lease_check < history_insert
 
 
+def test_monitor_results_renew_lease_before_persisting():
+    source = inspect.getsource(monitor_store.run_due_monitors)
+    assert "UPDATE monitor_run_leases" in source
+    assert "SET locked_until = CURRENT_TIMESTAMP + INTERVAL '10 minutes'" in source
+    assert "RETURNING lease_token" in source
+    assert "AND lease_token = %s" in source
+    assert "AND locked_until > CURRENT_TIMESTAMP" in source
+    lease_renewal = source.index("UPDATE monitor_run_leases")
+    history_insert = source.index("INSERT INTO price_history")
+    assert lease_renewal < history_insert
+
+
 
 def test_webhook_delivery_state_updates_require_current_lease():
     source = inspect.getsource(monitor_store._deliver_pending_webhooks)
