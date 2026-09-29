@@ -8,10 +8,12 @@ from datetime import datetime, timezone
 import httpx
 import psycopg
 
-from app.services.url_safety import safe_async_client, validate_public_url
+from app.services.url_safety import read_response_bytes, safe_async_client, validate_public_url
 
 _INIT_LOCK = Lock()
 _SCHEMA_READY = False
+
+MAX_WEBHOOK_RESPONSE_BYTES = 64 * 1024
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS monitors (
@@ -506,7 +508,10 @@ async def run_due_monitors() -> dict:
                 if old_price is not None and new_price is not None and new_price != old_price:
                     event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"ec-pulse:monitor:{monitor_id}:{last_checked_at.isoformat() if last_checked_at else 'initial'}:{old_price}:{new_price}"))
                     event = {"event": "price_changed", "event_id": event_id, "monitor_id": monitor_id, "old_price": old_price, "new_price": new_price, "change_amount": round(new_price-old_price,2), "change_percent": round(((new_price-old_price)/old_price)*100,2) if old_price else None, "direction": "down" if new_price < old_price else "up", "currency": currency, "url": url, "source": {"site": source.get("site"), "url": source_url}, "captured_at": data["captured_at"]}
-                    async with client.stream("POST", webhook_url, json=event, headers={"X-EC-Pulse-Event-ID": event_id}) as response:\n                        response.raise_for_status()\n                    changed += 1
+                    async with client.stream("POST", webhook_url, json=event, headers={"X-EC-Pulse-Event-ID": event_id}) as response:
+                        response.raise_for_status()
+                        await read_response_bytes(response, MAX_WEBHOOK_RESPONSE_BYTES)
+                    changed += 1
                 with psycopg.connect(_db_url()) as conn:
                     conn.execute("INSERT INTO price_history (monitor_id, price, currency, captured_at, source_url) VALUES (%s, %s, %s, %s, %s)", (monitor_id, new_price, currency, data["captured_at"], source_url))
                     conn.execute("UPDATE monitors SET last_price = %s, last_checked_at = %s WHERE id = %s", (new_price, now, monitor_id)); conn.commit()
