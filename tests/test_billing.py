@@ -237,7 +237,7 @@ def test_checkout_sets_pending_before_stripe_call(monkeypatch):
         @staticmethod
         def create(**kwargs):
             assert conn.committed is True
-            return type("Session", (), {"url": "https://checkout.example/session"})()
+            return type("Session", (), {"id": "cs_test", "url": "https://checkout.example/session"})()
 
     class FakeStripe:
         checkout = type("CheckoutContainer", (), {"Session": Checkout})
