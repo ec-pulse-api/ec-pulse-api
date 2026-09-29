@@ -71,7 +71,7 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
         return False
     event_id = subscription.get("_ec_pulse_event_id")
     state = conn.execute(
-        "SELECT last_stripe_event_created, last_stripe_event_id FROM api_accounts WHERE api_key_hash = %s",
+        "SELECT last_stripe_event_created, last_stripe_event_id FROM api_accounts WHERE api_key_hash = %s FOR UPDATE",
         (row[0],),
     ).fetchone()
     if event_created is not None and state and state[0] is not None:
