@@ -251,7 +251,7 @@ def test_checkout_uses_owning_account_hash_in_metadata(monkeypatch):
 
     class Cursor:
         def fetchone(self):
-            return ("account-hash", None, None, None)
+            return ("account-hash", None, None, None, None, None)
 
     class Conn:
         def execute(self, sql, params=()):
@@ -289,7 +289,7 @@ def test_checkout_rejects_existing_pending_checkout(monkeypatch):
 
     class Cursor:
         def fetchone(self):
-            return ("cus_123", None, None, "pending-key", datetime.now(timezone.utc) + timedelta(minutes=5))
+            return ("account-hash", "cus_123", None, None, "pending-key", datetime.now(timezone.utc) + timedelta(minutes=5))
 
     class Conn:
         def execute(self, sql, params=()):
