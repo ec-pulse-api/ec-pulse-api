@@ -376,6 +376,60 @@ def test_stale_checkout_completion_cannot_clear_new_pending_checkout(monkeypatch
     assert conn.updates == 0
 
 
+
+def test_stale_checkout_completion_cannot_claim_account_while_new_checkout_is_pending(monkeypatch):
+    import app.services.billing as billing
+    from datetime import datetime, timezone, timedelta
+
+    class Event:
+        def to_dict_recursive(self):
+            return {
+                "id": "evt_checkout_stale_first_customer",
+                "type": "checkout.session.completed",
+                "created": 200,
+                "data": {"object": {
+                    "customer": "cus_old",
+                    "subscription": "sub_old",
+                    "metadata": {"api_key_hash": "account-hash", "checkout_pending_key": "old-key"},
+                }},
+            }
+
+    class Webhook:
+        @staticmethod
+        def construct_event(payload, signature, secret):
+            return Event()
+
+    FakeStripe = type("FakeStripe", (), {"Webhook": Webhook})
+
+    class Cursor:
+        def __init__(self, row): self.row = row
+        def fetchone(self): return self.row
+
+    class Conn:
+        def __init__(self):
+            self.updates = []
+        def execute(self, sql, params=()):
+            if "INSERT INTO billing_events" in sql:
+                return Cursor(("evt_checkout_stale_first_customer",))
+            if "SELECT checkout_pending_key" in sql:
+                return Cursor(("new-key", datetime.now(timezone.utc) + timedelta(minutes=5), None))
+            self.updates.append((sql, params))
+            return Cursor(None)
+        def commit(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    conn = Conn()
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: conn)
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+
+    result = billing.process_webhook(b"payload", "sig")
+    assert result["handled"] is False
+    assert conn.updates == []
+
 def test_expired_checkout_completion_still_links_customer_and_subscription(monkeypatch):
     import app.services.billing as billing
 
