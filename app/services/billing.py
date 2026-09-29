@@ -25,6 +25,7 @@ def _init_billing(conn):
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS subscription_status TEXT")
+    conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS current_period_start TIMESTAMPTZ")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMPTZ")
     conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS last_stripe_event_created BIGINT")
@@ -84,7 +85,7 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
     effective_plan = plan if status in {"active", "trialing", "past_due"} else None
     if effective_plan:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
-            current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, event_id, datetime.now(timezone.utc), row[0]))
+            current_period_start=%s, current_period_end=%s, cancel_at_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), bool(subscription.get("cancel_at_period_end", False)), event_created, event_id, datetime.now(timezone.utc), row[0]))
     else:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
             current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan or "free", subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, event_id, datetime.now(timezone.utc), row[0]))
@@ -145,6 +146,63 @@ def process_webhook(payload: bytes, signature: str) -> dict:
                     ) or handled
         conn.commit()
     return {"ok": True, "duplicate": False, "event_id": event_id, "type": event_type, "handled": handled}
+
+
+def cancel_subscription(api_key: str, at_period_end: bool = True) -> dict:
+    """Cancel the account's current Stripe subscription.
+
+    Cancellation is requested in Stripe first; the webhook remains the source
+    of truth for the local subscription state. By default the customer keeps
+    access until the already-paid billing period ends.
+    """
+    from app.services.monitor_store import _account_hash
+
+    key_hash = _account_hash(api_key)
+    with psycopg.connect(_db_url()) as conn:
+        _init_billing(conn)
+        row = conn.execute(
+            """SELECT stripe_customer_id, stripe_subscription_id, subscription_status,
+                      current_period_end, cancel_at_period_end
+               FROM api_accounts
+               WHERE api_key_hash=%s
+               FOR UPDATE""",
+            (key_hash,),
+        ).fetchone()
+        if not row or not row[1]:
+            raise ValueError("No active Stripe subscription is linked to this account")
+        customer_id, subscription_id, status, period_end, already_scheduled = row
+        if status in {"canceled", "incomplete_expired", "unpaid"}:
+            raise ValueError("No active Stripe subscription is linked to this account")
+        if at_period_end and already_scheduled:
+            return {
+                "subscription_id": subscription_id,
+                "status": status,
+                "cancel_at_period_end": True,
+                "current_period_end": period_end.isoformat() if period_end else None,
+            }
+        try:
+            if at_period_end:
+                subscription = _stripe().Subscription.modify(
+                    subscription_id,
+                    cancel_at_period_end=True,
+                    idempotency_key=f"ec-pulse-cancel-{subscription_id}-period-end",
+                )
+            else:
+                subscription = _stripe().Subscription.delete(
+                    subscription_id,
+                    idempotency_key=f"ec-pulse-cancel-{subscription_id}-immediate",
+                )
+        except Exception as exc:
+            conn.rollback()
+            raise RuntimeError("Unable to cancel Stripe subscription") from exc
+        conn.commit()
+
+    return {
+        "subscription_id": subscription.get("id", subscription_id),
+        "status": subscription.get("status", status),
+        "cancel_at_period_end": bool(subscription.get("cancel_at_period_end", at_period_end)),
+        "current_period_end": _ts(subscription.get("current_period_end")),
+    }
 
 
 def create_customer_portal(api_key: str) -> str:
