@@ -62,6 +62,12 @@ CREATE TABLE IF NOT EXISTS api_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_api_usage_key_created ON api_usage (api_key_hash, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS monitor_run_leases (
+    monitor_id TEXT PRIMARY KEY REFERENCES monitors(id) ON DELETE CASCADE,
+    lease_token TEXT NOT NULL,
+    locked_until TIMESTAMPTZ NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS api_rate_limits (
     api_key_hash TEXT PRIMARY KEY,
     window_start TIMESTAMPTZ NOT NULL,
@@ -479,13 +485,21 @@ async def run_due_monitors() -> dict:
     checked = changed = failed = 0
     async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
         for monitor_id, url, interval, webhook_url, old_price, last_checked_at in rows:
-            lock_conn = None
-            locked = False
+            lease_token = str(uuid.uuid4())
             try:
-                lock_conn = psycopg.connect(_db_url())
-                lock_conn.autocommit = True
-                locked = lock_conn.execute("SELECT pg_try_advisory_lock(hashtext(%s))", (monitor_id,)).fetchone()[0]
-                if not locked:
+                with psycopg.connect(_db_url()) as lease_conn:
+                    lease_row = lease_conn.execute(
+                        """INSERT INTO monitor_run_leases (monitor_id, lease_token, locked_until)
+                        VALUES (%s, %s, CURRENT_TIMESTAMP + INTERVAL '60 seconds')
+                        ON CONFLICT (monitor_id) DO UPDATE
+                        SET lease_token = EXCLUDED.lease_token,
+                            locked_until = EXCLUDED.locked_until
+                        WHERE monitor_run_leases.locked_until <= CURRENT_TIMESTAMP
+                        RETURNING lease_token""",
+                        (monitor_id, lease_token),
+                    ).fetchone()
+                    lease_conn.commit()
+                if not lease_row:
                     continue
                 await validate_public_url(webhook_url)
                 data = await fetch_product(url); pricing = data.get("pricing", {}); new_price = pricing.get("price"); currency = pricing.get("currency"); source = data.get("source", {}); source_url = source.get("url") or url
@@ -500,10 +514,13 @@ async def run_due_monitors() -> dict:
             except Exception:
                 failed += 1
             finally:
-                if lock_conn is not None:
-                    try:
-                        if locked:
-                            lock_conn.execute("SELECT pg_advisory_unlock(hashtext(%s))", (monitor_id,))
-                    finally:
-                        lock_conn.close()
+                try:
+                    with psycopg.connect(_db_url()) as lease_conn:
+                        lease_conn.execute(
+                            "DELETE FROM monitor_run_leases WHERE monitor_id = %s AND lease_token = %s",
+                            (monitor_id, lease_token),
+                        )
+                        lease_conn.commit()
+                except Exception:
+                    pass
     return {"checked": checked, "changed": changed, "failed": failed}
