@@ -104,6 +104,8 @@ def test_subscription_state_row_is_locked_during_cancellation(monkeypatch):
         def __init__(self):
             self.sql = None
         def execute(self, sql, params=()):
+            if "FOR UPDATE" in sql:
+                self.select_sql = sql
             self.sql = sql
             return Cursor()
         def rollback(self):
