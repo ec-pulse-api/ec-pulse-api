@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 
 SOURCE_CONFIG = {
     "amazon": {
-        "domains": ("amazon.",),
+        "domains": ("amazon.co.jp", "amazon.com"),
         "selectors": ['[data-hook="review-body"]', '[data-testid="review-body"]', '[itemprop="reviewBody"]'],
     },
     "rakuten": {
@@ -45,16 +45,20 @@ GENERIC_SELECTORS = [
     'blockquote',
 ]
 
+def _host_matches(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
 def detect_source(host: str) -> str:
-    host = host.lower()
+    host = host.lower().split(":")[0]
     for source, config in SOURCE_CONFIG.items():
-        if any(domain in host for domain in config["domains"]):
+        if any(_host_matches(host, domain) for domain in config["domains"]):
             return source
     return "generic"
 
 def detect_market(host: str, language_hint: str | None = None) -> str:
     host = host.lower()
-    if ".co.jp" in host or "rakuten.co.jp" in host or language_hint == "ja":
+    if host.endswith(".co.jp") or host == "co.jp" or language_hint == "ja":
         return "JP"
     if host == "amazon.com" or host.endswith(".amazon.com"):
         return "US"
