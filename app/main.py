@@ -285,6 +285,10 @@ def research_runs(
 async def research_opportunity(run_id: str, request_http: Request, response: Response, api_key: str = Depends(get_api_key)):
     try:
         result = get_research_opportunity(api_key, run_id)
+        queries = []
+        for item in result.get("product_directions", [])[:3]:
+            if item["pain"] not in queries:
+                queries.append(item["pain"])
         charge = _charge(
             api_key,
             "GET /v1/research/runs/{run_id}/opportunity",
@@ -292,10 +296,6 @@ async def research_opportunity(run_id: str, request_http: Request, response: Res
         )
         for k, v in _usage_headers(request_http, api_key, charge).items():
             response.headers[k] = v
-        queries = []
-        for item in result.get("product_directions", [])[:3]:
-            if item["pain"] not in queries:
-                queries.append(item["pain"])
         candidates = []
         for query in queries:
             try:
