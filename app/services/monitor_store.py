@@ -209,7 +209,7 @@ def consume_credit(api_key: str, endpoint: str, credits: int = 1) -> dict:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
         row = conn.execute("""SELECT a.credits_balance FROM api_accounts a JOIN api_keys k ON k.account_key_hash = a.api_key_hash
-            WHERE k.api_key_hash = %s AND k.active = TRUE FOR UPDATE""", (key_hash,)).fetchone()
+            WHERE k.api_key_hash = %s AND k.active = TRUE FOR UPDATE OF k, a""", (key_hash,)).fetchone()
         if not row: raise RuntimeError("Invalid or revoked API key")
         if row[0] < credits: raise RuntimeError("Insufficient API credits")
         remaining = row[0] - credits
