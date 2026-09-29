@@ -71,7 +71,6 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
     state = conn.execute("SELECT last_stripe_event_created FROM api_accounts WHERE api_key_hash = %s", (row[0],)).fetchone()
     if event_created is not None and state and state[0] is not None and event_created < state[0]:
         return False
-    values = (subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), datetime.now(timezone.utc), row[0])
     if plan:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
             current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, updated_at=%s WHERE api_key_hash=%s""", (plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, datetime.now(timezone.utc), row[0]))
