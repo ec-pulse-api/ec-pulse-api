@@ -195,16 +195,20 @@ def pricing():
     }
 
 @app.post("/v1/consumer-insights/analyze")
-def consumer_insights(request: ConsumerInsightRequest, api_key: str = Depends(get_api_key)):
+def consumer_insights(request: ConsumerInsightRequest, request_http: Request, response: Response, api_key: str = Depends(get_api_key)):
     charge = _charge(api_key, "POST /v1/consumer-insights/analyze", max(1, len(request.comments) // 50))
+    for k, v in _usage_headers(request_http, api_key, charge).items():
+        response.headers[k] = v
     result = analyze_comments(request.comments, request.source, "en-US" if request.source and any(x in request.source.lower() for x in ["amazon.com", "reddit", "youtube.com", "tiktok.com"]) else None)
     result["credits"] = charge
     return result
 
 @app.post("/v1/research/ingest")
-async def research_ingest(request: ResearchUrlRequest, api_key: str = Depends(get_api_key)):
+async def research_ingest(request: ResearchUrlRequest, request_http: Request, response: Response, api_key: str = Depends(get_api_key)):
     await _validate_urls([str(url) for url in request.urls])
     charge = _charge(api_key, "POST /v1/research/ingest", len(request.urls))
+    for k, v in _usage_headers(request_http, api_key, charge).items():
+        response.headers[k] = v
     results = []
     for url in request.urls:
         try:
@@ -340,22 +344,24 @@ def monitors(api_key:str=Depends(get_api_key)):
     except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
 
 @app.get("/v1/monitors/{monitor_id}/history")
-def monitor_history(monitor_id:str,limit:int=100,api_key:str=Depends(get_api_key)):
+def monitor_history(monitor_id:str, request_http:Request, response:Response, limit:int=100,api_key:str=Depends(get_api_key)):
     if not 1<=limit<=1000: raise HTTPException(status_code=400,detail="limit must be between 1 and 1000")
     try:
         result = get_price_history(api_key,monitor_id,limit)
         charge = _charge(api_key,"GET /v1/monitors/{monitor_id}/history")
+        for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
         result["credits"] = charge
         return result
     except KeyError as exc: raise HTTPException(status_code=404,detail="Monitor not found") from exc
     except RuntimeError as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
 
 @app.get("/v1/monitors/{monitor_id}/opportunity")
-def monitor_opportunity(monitor_id:str,limit:int=100,api_key:str=Depends(get_api_key)):
+def monitor_opportunity(monitor_id:str, request_http:Request, response:Response, limit:int=100,api_key:str=Depends(get_api_key)):
     if not 2<=limit<=1000: raise HTTPException(status_code=400,detail="limit must be between 2 and 1000")
     try:
         result = get_price_opportunity(api_key,monitor_id,limit)
         charge = _charge(api_key,"GET /v1/monitors/{monitor_id}/opportunity",2)
+        for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
         result["credits"] = charge
         return result
     except KeyError as exc: raise HTTPException(status_code=404,detail="Monitor not found") from exc
