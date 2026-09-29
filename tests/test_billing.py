@@ -91,3 +91,75 @@ def test_subscription_state_row_is_locked_during_update(monkeypatch):
     conn = FakeConn()
     assert _apply_subscription(conn, _subscription("active"), 100) is True
     assert "FOR UPDATE" in conn.state_sql
+
+
+def test_subscription_state_row_is_locked_during_cancellation(monkeypatch):
+    import app.services.billing as billing
+
+    class Cursor:
+        def fetchone(self):
+            return ("cus_123", "sub_123", "active", None, False)
+
+    class Conn:
+        def __init__(self):
+            self.sql = None
+        def execute(self, sql, params=()):
+            self.sql = sql
+            return Cursor()
+        def rollback(self):
+            pass
+        def commit(self):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    class FakeSubscription:
+        @staticmethod
+        def modify(subscription_id, **kwargs):
+            assert subscription_id == "sub_123"
+            assert kwargs["cancel_at_period_end"] is True
+            assert kwargs["idempotency_key"]
+            return {"id": "sub_123", "status": "active", "cancel_at_period_end": True}
+
+    class FakeStripe:
+        Subscription = FakeSubscription
+
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: Conn())
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+    monkeypatch.setattr(billing, "_account_hash", lambda key: "account-hash")
+
+    result = billing.cancel_subscription("secret")
+    assert result["cancel_at_period_end"] is True
+
+
+def test_canceled_subscription_cannot_be_canceled_again(monkeypatch):
+    import app.services.billing as billing
+
+    class Cursor:
+        def fetchone(self):
+            return ("cus_123", "sub_123", "canceled", None, False)
+
+    class Conn:
+        def execute(self, sql, params=()):
+            return Cursor()
+        def commit(self):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: Conn())
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+    monkeypatch.setattr(billing, "_account_hash", lambda key: "account-hash")
+    try:
+        billing.cancel_subscription("secret")
+    except ValueError as exc:
+        assert "No active Stripe subscription" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
