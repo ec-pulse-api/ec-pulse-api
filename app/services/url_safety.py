@@ -81,7 +81,8 @@ def safe_async_transport():
 
     class _SafeNetworkBackend(httpcore.AsyncNetworkBackend):
         def __init__(self) -> None:
-            self._backend = httpcore.AutoBackend()
+            from httpcore._backends.auto import AutoBackend
+            self._backend = AutoBackend()
 
         async def connect_tcp(
             self,
