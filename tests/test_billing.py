@@ -530,6 +530,16 @@ def test_older_subscription_cannot_replace_newer_active_subscription_even_with_l
     assert conn.updates == 0
 
 
+def test_new_subscription_can_replace_terminal_previous_subscription_even_if_its_event_is_older(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    conn = FakeConn(("sub_old", "canceled", 500, "evt_old_terminal", 200))
+    new_subscription = _subscription("active", "evt_new")
+    new_subscription["id"] = "sub_new"
+    new_subscription["created"] = 300
+    assert _apply_subscription(conn, new_subscription, 300) is True
+    assert conn.updates == 1
+
+
 def test_new_subscription_can_replace_terminal_previous_subscription(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
     conn = FakeConn(("sub_old", "canceled", 300, "evt_old", 200))
