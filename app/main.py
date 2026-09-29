@@ -338,7 +338,7 @@ async def product_compare(request_http:Request,response:Response,request:Product
         payload,cache_hit=result; products.append({"url":url,"ok":True,"cache":{"hit":cache_hit,"ttl_seconds":300},"product":payload})
     successful=[x["product"] for x in products if x["ok"]]
     ranked=sorted(successful,key=lambda x:(x.get("pricing",{}).get("price") is None,x.get("pricing",{}).get("price") or float("inf")))
-    return {"count":len(products),"successful":len(successful),"results":products,"price_ranking":[{"rank":i,"url":x.get("source",{}).get("url"),"title":x.get("product",{}).get("title"),"price":x.get("pricing",{}).get("price"),"currency":x.get("pricing",{}).get("currency"),"marketplace":x.get("source",{}).get("marketplace"),"product_id":x.get("source",{}).get("product_id")} for i,x in enumerate(ranked,1)]}
+    return {"count":len(products),"successful":len(successful),"credits":charge,"results":products,"price_ranking":[{"rank":i,"url":x.get("source",{}).get("url"),"title":x.get("product",{}).get("title"),"price":x.get("pricing",{}).get("price"),"currency":x.get("pricing",{}).get("currency"),"marketplace":x.get("source",{}).get("marketplace"),"product_id":x.get("source",{}).get("product_id")} for i,x in enumerate(ranked,1)]}
 
 @app.post("/v1/monitors")
 async def monitor(request_http:Request,response:Response,request:MonitorRequest,api_key:str=Depends(get_api_key)):
