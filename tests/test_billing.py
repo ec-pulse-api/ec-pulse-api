@@ -387,7 +387,7 @@ def test_stale_terminal_event_from_old_subscription_cannot_replace_new_active_su
 
 def test_equal_timestamp_old_subscription_cannot_replace_new_active_subscription(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
-    conn = FakeConn(("sub_new", "active", 300, "evt_new"))
+    conn = FakeConn(("sub_new", "active", 300, "evt_new", 300))
     old_subscription = _subscription("canceled", "evt_old")
     old_subscription["id"] = "sub_old"
     assert _apply_subscription(conn, old_subscription, 300) is False
