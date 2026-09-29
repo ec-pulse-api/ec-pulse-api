@@ -357,7 +357,7 @@ def test_stale_checkout_completion_cannot_clear_new_pending_checkout(monkeypatch
             if "INSERT INTO billing_events" in sql:
                 return Cursor(("evt_checkout_old",))
             if "SELECT checkout_pending_key" in sql:
-                return Cursor(("new-key",))
+                return Cursor(("new-key", "cus_new"))
             self.updates += 1
             return Cursor(None)
         def commit(self): pass
@@ -374,6 +374,76 @@ def test_stale_checkout_completion_cannot_clear_new_pending_checkout(monkeypatch
     result = billing.process_webhook(b"payload", "sig")
     assert result["handled"] is False
     assert conn.updates == 0
+
+
+def test_expired_checkout_completion_still_links_customer_and_subscription(monkeypatch):
+    import app.services.billing as billing
+
+    class Event:
+        def to_dict_recursive(self):
+            return {
+                "id": "evt_checkout_expired",
+                "type": "checkout.session.completed",
+                "created": 400,
+                "data": {"object": {
+                    "customer": "cus_old",
+                    "subscription": "sub_old",
+                    "metadata": {"api_key_hash": "account-hash", "checkout_pending_key": "expired-key"},
+                }},
+            }
+
+    class Webhook:
+        @staticmethod
+        def construct_event(payload, signature, secret):
+            return Event()
+
+    class Subscription:
+        @staticmethod
+        def retrieve(subscription_id):
+            return type("SubscriptionObject", (), {
+                "to_dict_recursive": lambda self: {
+                    "id": subscription_id,
+                    "customer": "cus_old",
+                    "created": 390,
+                    "status": "active",
+                    "items": {"data": [{"price": {"id": "price_pro"}}]},
+                }
+            })()
+
+    FakeStripe = type("FakeStripe", (), {"Webhook": Webhook, "Subscription": Subscription})
+
+    class Cursor:
+        def __init__(self, row): self.row = row
+        def fetchone(self): return self.row
+
+    class Conn:
+        def __init__(self): self.updates = []
+        def execute(self, sql, params=()):
+            if "INSERT INTO billing_events" in sql:
+                return Cursor(("evt_checkout_expired",))
+            if "SELECT checkout_pending_key" in sql:
+                return Cursor(("expired-key", None))
+            if "SELECT api_key_hash" in sql:
+                return Cursor(("account-hash",))
+            if "SELECT stripe_subscription_id, subscription_status" in sql:
+                return Cursor((None, None, None, None, None))
+            self.updates.append((sql, params))
+            return Cursor(None)
+        def commit(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    conn = Conn()
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: conn)
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+
+    result = billing.process_webhook(b"payload", "sig")
+    assert result["handled"] is True
+    assert any("stripe_customer_id=%s, updated_at=%s" in sql for sql, _ in conn.updates)
 
 
 def test_stale_terminal_event_from_old_subscription_cannot_replace_new_active_subscription(monkeypatch):
