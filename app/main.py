@@ -90,7 +90,7 @@ def _consumer_insight_credit_cost(comment_count: int) -> int:
     return max(1, (comment_count + 49) // 50)
 
 
-def _usage_headers(request: Request, api_key: str, result: dict | None = None) -> dict[str,str]:
+def _usage_headers(request: Request, api_key: str, credits_used: int | None = None) -> dict[str,str]:
     try:
         account = ensure_api_account(api_key)
         rate = getattr(request.state, "rate_limit", None)
@@ -103,8 +103,8 @@ def _usage_headers(request: Request, api_key: str, result: dict | None = None) -
             "X-RateLimit-Reset": str(rate["reset_seconds"]),
             "X-EC-Credits-Remaining": str(account["credits_balance"]),
         }
-        if result:
-            headers["X-EC-Credits-Used"] = str(result.get("credits_used", 0))
+        if credits_used is not None:
+            headers["X-EC-Credits-Used"] = str(credits_used)
         return headers
     except Exception:
         return {}
