@@ -57,3 +57,13 @@ def test_webhook_claim_uses_skip_locked_and_expiring_lease():
     assert "FOR UPDATE SKIP LOCKED" in source
     assert "d.locked_until IS NULL OR d.locked_until <= %s" in source
     assert "locked_until = %s, lease_token = %s" in source
+
+
+def test_webhook_delivery_checks_lease_before_post():
+    source = inspect.getsource(monitor_store._deliver_pending_webhooks)
+    lease_check = source.index("lease_owned =")
+    post = source.index('client.stream(')
+    assert lease_check < post
+    assert "AND lease_token = %s" in source
+    assert "AND locked_until > CURRENT_TIMESTAMP" in source
+    assert "FOR UPDATE" in source
