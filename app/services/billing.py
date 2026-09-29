@@ -70,13 +70,28 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
     if not row:
         return False
     event_id = subscription.get("_ec_pulse_event_id")
+    state = conn.execute(
+        "SELECT last_stripe_event_created, last_stripe_event_id FROM api_accounts WHERE api_key_hash = %s",
+        (row[0],),
+    ).fetchone()
+    if event_created is not None and state and state[0] is not None:
+        previous_created, previous_event_id = state
+        if event_created < previous_created:
+            return False
+        if (
+            event_created == previous_created
+            and previous_event_id
+            and event_id
+            and event_id <= previous_event_id
+        ):
+            return False
     effective_plan = plan if status in {"active", "trialing", "past_due"} else None
     if effective_plan:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
             current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, event_id, datetime.now(timezone.utc), row[0]))
     else:
-        conn.execute("""UPDATE api_accounts SET stripe_subscription_id=%s, subscription_status=%s,
-            current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, event_id, datetime.now(timezone.utc), row[0]))
+        conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
+            current_period_start=%s, current_period_end=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan or "free", subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), event_created, event_id, datetime.now(timezone.utc), row[0]))
     return True
 
 
