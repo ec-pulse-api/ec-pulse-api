@@ -19,6 +19,7 @@ from app.services.research_ingest import fetch_public_comments
 from app.services.rate_limit import check_rate_limit
 from app.services.request_signature import verify_request_signature
 from app.services.url_safety import validate_public_url
+from app.services.google_auth import current_user, exchange_callback, google_login, logout
 
 app = FastAPI(
     title="EC Pulse API",
@@ -147,6 +148,28 @@ async def _fetch_product_or_http_error(url: str):
         return {**payload,"cache":{"hit":cache_hit,"ttl_seconds":300}}
     except ValueError as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc
     except Exception as exc: raise HTTPException(status_code=502,detail=f"Unable to retrieve product page: {type(exc).__name__}") from exc
+
+@app.get("/auth/google", include_in_schema=False)
+async def auth_google():
+    return await google_login()
+
+
+@app.get("/auth/callback", include_in_schema=False)
+async def auth_callback(request: Request, code: str | None = None):
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing OAuth code")
+    return await exchange_callback(request, code)
+
+
+@app.get("/auth/me", tags=["auth"])
+async def auth_me(request: Request):
+    return {"user": await current_user(request)}
+
+
+@app.post("/auth/logout", include_in_schema=False)
+def auth_logout():
+    return logout()
+
 
 @app.get("/")
 def root():
