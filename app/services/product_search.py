@@ -26,6 +26,7 @@ _yahoo_last_request_at = 0.0
 _AMAZON_TOKEN_LOCK = asyncio.Lock()
 _amazon_access_token: str | None = None
 _amazon_token_expires_at = 0.0
+MAX_SEARCH_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
 async def _amazon_token() -> str:
@@ -52,7 +53,11 @@ async def _amazon_token() -> str:
                     "scope": "creatorsapi::default",
                 },
             )
+            if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
+                raise ValueError("Amazon token response is too large")
             response.raise_for_status()
+            if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
+                raise ValueError("Yahoo API response is too large")
             payload = response.json()
         token = payload.get("access_token")
         expires_in = payload.get("expires_in", 3600)
@@ -144,6 +149,8 @@ async def _search_amazon_official(query: str, limit: int) -> list[dict]:
             _amazon_access_token = None
             _amazon_token_expires_at = 0.0
         response.raise_for_status()
+        if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
+            raise ValueError("Amazon API response is too large")
         data = response.json()
     result = data.get("searchResult") if isinstance(data.get("searchResult"), dict) else {}
     items = result.get("items", [])
@@ -201,6 +208,8 @@ async def _search_rakuten_official(query: str, limit: int) -> list[dict]:
             headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12", "accessKey": access_key},
         )
         response.raise_for_status()
+        if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
+            raise ValueError("Rakuten API response is too large")
         payload = response.json()
     items = payload.get("items", [])
     if not isinstance(items, list):
@@ -298,6 +307,8 @@ async def _search_marketplace(marketplace: str, query: str, limit: int) -> list[
             break
         else:
             raise ValueError("Too many redirects")
+    if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
+        raise ValueError("Marketplace search response is too large")
     return _links(response.text, marketplace)[:limit]
 
 
