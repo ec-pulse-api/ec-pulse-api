@@ -76,9 +76,6 @@ async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("Only http/https URLs are supported")
 
-    source = detect_source(parsed.netloc)
-    market = detect_market(parsed.netloc)
-    locale = detect_locale(market)
     headers = {
         "User-Agent": "EC-Pulse-Research/0.12 (+public-page-analysis)",
         "Accept-Language": "ja,en;q=0.8",
@@ -98,6 +95,10 @@ async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
         else:
             raise ValueError("Too many redirects")
 
+    final_parsed = urlparse(current_url)
+    source = detect_source(final_parsed.netloc)
+    market = detect_market(final_parsed.netloc)
+    locale = detect_locale(market)
     soup = BeautifulSoup(response.text, "html.parser")
     candidates = []
     for selector in _selectors_for(source):
@@ -120,7 +121,7 @@ async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
     title = soup.title.get_text(" ", strip=True) if soup.title else None
     return {
         "url": current_url,
-        "source": parsed.netloc,
+        "source": final_parsed.netloc,
         "source_type": source,
         "market": market,
         "locale": locale,
