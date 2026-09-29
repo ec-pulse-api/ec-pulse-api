@@ -506,7 +506,7 @@ async def _search_yahoo_official(query: str, limit: int) -> list[dict]:
                 await asyncio.sleep(delay)
                 status, payload, _ = await request()
                 if status == 429:
-                    raise httpx.HTTPStatusError("Yahoo Shopping API rate limit", request=None, response=None)
+                    raise RuntimeError("Yahoo Shopping API rate limit")
     if not isinstance(payload, dict):
         raise ValueError("Invalid Yahoo Shopping API response")
     hits = payload.get("hits", [])
