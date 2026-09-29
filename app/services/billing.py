@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import psycopg
 import stripe
 
-from app.services.monitor_store import _db_url
+from app.services.monitor_store import _account_hash, _db_url
 
 PLANS = {"pro": "STRIPE_PRICE_PRO", "business": "STRIPE_PRICE_BUSINESS"}
 
