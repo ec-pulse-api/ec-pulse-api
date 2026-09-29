@@ -87,7 +87,14 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
     ).fetchone()
     if event_created is not None and state:
         previous_subscription_id, previous_status, previous_created, _previous_event_id, previous_subscription_created_at = state
-        if previous_created is not None and event_created < previous_created:
+        if (
+            previous_subscription_id
+            and subscription_id
+            and subscription_id == previous_subscription_id
+            and previous_created is not None
+            and event_created is not None
+            and event_created < previous_created
+        ):
             return False
         # A customer can have more than one Stripe subscription. Once this
         # account is on a live subscription, a terminal event for a different
