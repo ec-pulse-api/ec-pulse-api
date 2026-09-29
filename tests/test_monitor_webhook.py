@@ -41,3 +41,19 @@ def test_monitor_results_require_active_lease_before_persisting():
     lease_check = source.index("lease_owned =")
     history_insert = source.index("INSERT INTO price_history")
     assert lease_check < history_insert
+
+
+
+def test_webhook_delivery_state_updates_require_current_lease():
+    source = inspect.getsource(monitor_store._deliver_pending_webhooks)
+    delivered = source[source.index("SET status='delivered'") : source.index("delivered += 1")]
+    failed = source[source.index("SET attempts=%s") : source.index("conn.commit()", source.index("SET attempts=%s"))]
+    assert "WHERE event_id=%s AND lease_token=%s" in delivered
+    assert "WHERE event_id=%s AND lease_token=%s" in failed
+
+
+def test_webhook_claim_uses_skip_locked_and_expiring_lease():
+    source = inspect.getsource(monitor_store._deliver_pending_webhooks)
+    assert "FOR UPDATE SKIP LOCKED" in source
+    assert "d.locked_until IS NULL OR d.locked_until <= %s" in source
+    assert "locked_until = %s, lease_token = %s" in source
