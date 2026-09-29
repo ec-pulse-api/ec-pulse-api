@@ -306,14 +306,18 @@ async def product_get(request:Request,response:Response,url:HttpUrl=Query(...),a
     await _validate_urls([str(url)])
     charge=_charge(api_key,"GET /v1/products")
     for k,v in _usage_headers(request,api_key,charge).items(): response.headers[k]=v
-    return await _fetch_product_or_http_error(str(url))
+    result = await _fetch_product_or_http_error(str(url))
+    result["credits"] = charge
+    return result
 
 @app.post("/v1/products")
 async def product_post(request_http:Request,response:Response,request:ProductRequest,api_key:str=Depends(get_api_key)):
     await _validate_urls([str(request.url)])
     charge=_charge(api_key,"POST /v1/products")
     for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
-    return await _fetch_product_or_http_error(str(request.url))
+    result = await _fetch_product_or_http_error(str(request.url))
+    result["credits"] = charge
+    return result
 
 @app.post("/v1/products/search")
 async def product_search(request_http:Request,response:Response,request:ProductSearchRequest,api_key:str=Depends(get_api_key)):
@@ -322,8 +326,12 @@ async def product_search(request_http:Request,response:Response,request:ProductS
     if len(set(marketplaces)) != len(marketplaces): raise HTTPException(status_code=400,detail="marketplaces must not contain duplicates")
     charge=_charge(api_key,"POST /v1/products/search",request.limit*len(marketplaces))
     for k,v in _usage_headers(request_http,api_key,charge).items(): response.headers[k]=v
-    try: return await search_products(request.query,marketplaces,request.limit)
-    except Exception as exc: raise HTTPException(status_code=502,detail=f"Product search failed: {type(exc).__name__}") from exc
+    try:
+        result = await search_products(request.query, marketplaces, request.limit)
+        result["credits"] = charge
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Product search failed: {type(exc).__name__}") from exc
 
 @app.post("/v1/products/compare")
 async def product_compare(request_http:Request,response:Response,request:ProductCompareRequest,api_key:str=Depends(get_api_key)):
