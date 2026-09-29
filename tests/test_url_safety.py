@@ -37,3 +37,14 @@ async def test_oversized_url_is_rejected():
 
     with pytest.raises(ValueError):
         await validate_public_url("https://example.com/" + "a" * 2048)
+
+@pytest.mark.asyncio
+async def test_shared_address_space_is_rejected(monkeypatch):
+    from app.services import url_safety
+
+    def fake_getaddrinfo(*args, **kwargs):
+        return [(None, None, None, None, ("100.64.0.1", 0))]
+
+    monkeypatch.setattr(url_safety.socket, "getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(ValueError):
+        await url_safety.validate_public_url("https://example.com/")
