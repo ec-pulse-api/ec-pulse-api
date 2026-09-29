@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 
@@ -33,6 +34,22 @@ def _init(conn):
     conn.commit()
 
 
+_init_lock = threading.Lock()
+_initialized = False
+
+
+def _ensure_initialized() -> None:
+    global _initialized
+    if _initialized:
+        return
+    with _init_lock:
+        if _initialized:
+            return
+        with psycopg.connect(_db_url()) as conn:
+            _init(conn)
+        _initialized = True
+
+
 def _key(url: str) -> str:
     return sha256(url.strip().encode()).hexdigest()
 
@@ -40,6 +57,7 @@ def _key(url: str) -> str:
 async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, bool]:
     now = datetime.now(timezone.utc)
     cache_key = _key(url)
+    _ensure_initialized()
 
     with psycopg.connect(_db_url()) as conn:
         row = conn.execute(
