@@ -90,6 +90,13 @@ def _consumer_insight_credit_cost(comment_count: int) -> int:
     return max(1, (comment_count + 49) // 50)
 
 
+def _research_opportunity_credit_cost(query_count: int, marketplaces: int = 3, limit: int = 5) -> int:
+    """Mirror the existing product-search credit unit for internal opportunity searches."""
+    if query_count < 0 or marketplaces < 1 or limit < 1:
+        raise ValueError("query_count, marketplaces, and limit must be positive")
+    return max(1, query_count * marketplaces * limit)
+
+
 def _usage_headers(request: Request, api_key: str, credits_used: int | None = None) -> dict[str,str]:
     try:
         account = ensure_api_account(api_key)
@@ -278,7 +285,7 @@ def research_runs(
 async def research_opportunity(run_id: str, request_http: Request, response: Response, api_key: str = Depends(get_api_key)):
     try:
         result = get_research_opportunity(api_key, run_id)
-        charge = _charge(api_key, "GET /v1/research/runs/{run_id}/opportunity", 1)
+        charge = _charge(\n            api_key,\n            "GET /v1/research/runs/{run_id}/opportunity",\n            _research_opportunity_credit_cost(len(queries), marketplaces=3, limit=5),\n        )
         for k, v in _usage_headers(request_http, api_key, charge).items():
             response.headers[k] = v
         queries = []
