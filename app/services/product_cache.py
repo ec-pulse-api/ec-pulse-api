@@ -72,7 +72,6 @@ async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, 
     expires_at = captured_at + timedelta(seconds=ttl_seconds)
 
     with psycopg.connect(_db_url()) as conn:
-        _init(conn)
         conn.execute(
             """
             INSERT INTO product_cache (cache_key, url, payload, captured_at, expires_at)
