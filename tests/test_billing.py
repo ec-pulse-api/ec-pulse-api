@@ -503,6 +503,133 @@ def test_expired_checkout_completion_still_links_customer_and_subscription(monke
     assert not any("checkout_pending_key=NULL" in sql for sql, _ in conn.updates)
 
 
+def test_invoice_payment_failed_reconciles_latest_subscription(monkeypatch):
+    import app.services.billing as billing
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+
+    class Event:
+        def to_dict_recursive(self):
+            return {
+                "id": "evt_invoice_failed",
+                "type": "invoice.payment_failed",
+                "created": 600,
+                "data": {"object": {"subscription": "sub_123"}},
+            }
+
+    class Webhook:
+        @staticmethod
+        def construct_event(payload, signature, secret):
+            return Event()
+
+    class Subscription:
+        @staticmethod
+        def retrieve(subscription_id):
+            assert subscription_id == "sub_123"
+            return type("SubscriptionObject", (), {
+                "to_dict_recursive": lambda self: {
+                    "id": "sub_123",
+                    "customer": "cus_123",
+                    "created": 500,
+                    "status": "past_due",
+                    "items": {"data": [{"price": {"id": "price_pro"}}]},
+                }
+            })()
+
+    class Cursor:
+        def __init__(self, row): self.row = row
+        def fetchone(self): return self.row
+
+    class Conn:
+        def __init__(self): self.updates = 0
+        def execute(self, sql, params=()):
+            if "INSERT INTO billing_events" in sql:
+                return Cursor(("evt_invoice_failed",))
+            if "SELECT api_key_hash" in sql:
+                return Cursor(("account-hash",))
+            if "SELECT stripe_subscription_id, subscription_status" in sql:
+                return Cursor(("sub_123", "active", 500, "evt_old", 500))
+            self.updates += 1
+            return Cursor(None)
+        def commit(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    FakeStripe = type("FakeStripe", (), {"Webhook": Webhook, "Subscription": Subscription})
+    conn = Conn()
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: conn)
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+
+    result = billing.process_webhook(b"payload", "sig")
+    assert result["handled"] is True
+    assert conn.updates == 1
+
+
+def test_invoice_paid_reconciles_latest_subscription(monkeypatch):
+    import app.services.billing as billing
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+
+    class Event:
+        def to_dict_recursive(self):
+            return {
+                "id": "evt_invoice_paid",
+                "type": "invoice.paid",
+                "created": 700,
+                "data": {"object": {"subscription": "sub_123"}},
+            }
+
+    class Webhook:
+        @staticmethod
+        def construct_event(payload, signature, secret):
+            return Event()
+
+    class Subscription:
+        @staticmethod
+        def retrieve(subscription_id):
+            return type("SubscriptionObject", (), {
+                "to_dict_recursive": lambda self: {
+                    "id": subscription_id,
+                    "customer": "cus_123",
+                    "created": 500,
+                    "status": "active",
+                    "items": {"data": [{"price": {"id": "price_pro"}}]},
+                }
+            })()
+
+    class Cursor:
+        def __init__(self, row): self.row = row
+        def fetchone(self): return self.row
+
+    class Conn:
+        def __init__(self): self.updates = 0
+        def execute(self, sql, params=()):
+            if "INSERT INTO billing_events" in sql:
+                return Cursor(("evt_invoice_paid",))
+            if "SELECT api_key_hash" in sql:
+                return Cursor(("account-hash",))
+            if "SELECT stripe_subscription_id, subscription_status" in sql:
+                return Cursor(("sub_123", "past_due", 600, "evt_failed", 500))
+            self.updates += 1
+            return Cursor(None)
+        def commit(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    FakeStripe = type("FakeStripe", (), {"Webhook": Webhook, "Subscription": Subscription})
+    conn = Conn()
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: conn)
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+
+    result = billing.process_webhook(b"payload", "sig")
+    assert result["handled"] is True
+    assert conn.updates == 1
+
+
 def test_stale_terminal_event_from_old_subscription_cannot_replace_new_active_subscription(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
     conn = FakeConn(("sub_new", "active", 300, "evt_new", 300))
