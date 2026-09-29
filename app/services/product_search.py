@@ -19,7 +19,7 @@ SEARCH_URLS = {
 
 YAHOO_API_URL = "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
 AMAZON_API_URL = "https://creatorsapi.amazon/catalog/v1/searchItems"
-AMAZON_TOKEN_URL = "https://api.amazon.co.jp/auth/o2/token"
+AMAZON_TOKEN_URLS = {"3.1": "https://api.amazon.com/auth/o2/token", "3.2": "https://api.amazon.co.uk/auth/o2/token", "3.3": "https://api.amazon.co.jp/auth/o2/token"}
 _YAHOO_REQUEST_LOCK = asyncio.Lock()
 _YAHOO_MIN_INTERVAL_SECONDS = 1.05
 _yahoo_last_request_at = 0.0
@@ -42,9 +42,13 @@ async def _amazon_token() -> str:
         now = asyncio.get_running_loop().time()
         if _amazon_access_token and now < _amazon_token_expires_at - 60:
             return _amazon_access_token
+        credential_version = os.getenv("AMAZON_CREDENTIAL_VERSION", "3.3")
+        token_url = AMAZON_TOKEN_URLS.get(credential_version)
+        if not token_url:
+            raise RuntimeError("AMAZON_CREDENTIAL_VERSION must be 3.1, 3.2, or 3.3")
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
-                AMAZON_TOKEN_URL,
+                token_url,
                 headers={"Content-Type": "application/json"},
                 json={
                     "grant_type": "client_credentials",
@@ -56,8 +60,6 @@ async def _amazon_token() -> str:
             if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
                 raise ValueError("Amazon token response is too large")
             response.raise_for_status()
-            if len(response.content) > MAX_SEARCH_RESPONSE_BYTES:
-                raise ValueError("Amazon token response is too large")
             payload = response.json()
         token = payload.get("access_token")
         expires_in = payload.get("expires_in", 3600)
