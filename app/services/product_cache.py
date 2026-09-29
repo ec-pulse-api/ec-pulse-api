@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import threading
@@ -31,6 +32,15 @@ def _init(conn):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_product_cache_expires ON product_cache (expires_at)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_cache_locks (
+            cache_key TEXT PRIMARY KEY,
+            lock_token TEXT NOT NULL,
+            locked_until TIMESTAMPTZ NOT NULL
+        )
+        """
+    )
     conn.commit()
 
 
@@ -61,39 +71,75 @@ async def fetch_product_cached(url: str, ttl_seconds: int = 300) -> tuple[dict, 
     cache_key = _key(url)
     _ensure_initialized()
 
-    # Session-level advisory lock prevents a cold/stale-key thundering herd
-    # across concurrent serverless instances.
-    conn = psycopg.connect(_db_url())
-    try:
-        conn.execute("SELECT pg_advisory_lock(hashtext(%s))", (cache_key,))
+    with psycopg.connect(_db_url()) as conn:
         row = conn.execute(
             "SELECT payload FROM product_cache WHERE cache_key = %s AND expires_at > %s",
             (cache_key, now),
         ).fetchone()
+    if row:
+        return row[0], True
+
+    # Use a short-lived DB lease instead of holding a PostgreSQL connection
+    # open while the external product page is being fetched.
+    lock_token = sha256(f"{cache_key}:{datetime.now(timezone.utc).timestamp()}".encode()).hexdigest()
+    lease_until = datetime.now(timezone.utc) + timedelta(seconds=60)
+    with psycopg.connect(_db_url()) as conn:
+        claimed = conn.execute(
+            """
+            INSERT INTO product_cache_locks (cache_key, lock_token, locked_until)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (cache_key) DO UPDATE
+            SET lock_token = EXCLUDED.lock_token,
+                locked_until = EXCLUDED.locked_until
+            WHERE product_cache_locks.locked_until <= CURRENT_TIMESTAMP
+            RETURNING lock_token
+            """,
+            (cache_key, lock_token, lease_until),
+        ).fetchone()
+
+    if not claimed:
+        for _ in range(150):
+            await asyncio.sleep(0.2)
+            with psycopg.connect(_db_url()) as conn:
+                row = conn.execute(
+                    "SELECT payload FROM product_cache WHERE cache_key = %s AND expires_at > %s",
+                    (cache_key, datetime.now(timezone.utc)),
+                ).fetchone()
+            if row:
+                return row[0], True
+        raise TimeoutError("Timed out waiting for product cache refresh")
+
+    try:
+        with psycopg.connect(_db_url()) as conn:
+            row = conn.execute(
+                "SELECT payload FROM product_cache WHERE cache_key = %s AND expires_at > %s",
+                (cache_key, datetime.now(timezone.utc)),
+            ).fetchone()
         if row:
-            conn.execute("SELECT pg_advisory_unlock(hashtext(%s))", (cache_key,))
             return row[0], True
 
         payload = await fetch_product(url)
         captured_at = datetime.now(timezone.utc)
         expires_at = captured_at + timedelta(seconds=ttl_seconds)
-        conn.execute(
-            """
-            INSERT INTO product_cache (cache_key, url, payload, captured_at, expires_at)
-            VALUES (%s, %s, %s::jsonb, %s, %s)
-            ON CONFLICT (cache_key) DO UPDATE SET
-                url = EXCLUDED.url,
-                payload = EXCLUDED.payload,
-                captured_at = EXCLUDED.captured_at,
-                expires_at = EXCLUDED.expires_at
-            """,
-            (cache_key, url, json.dumps(payload), captured_at, expires_at),
-        )
-        conn.commit()
-        conn.execute("SELECT pg_advisory_unlock(hashtext(%s))", (cache_key,))
+        with psycopg.connect(_db_url()) as conn:
+            conn.execute(
+                """
+                INSERT INTO product_cache (cache_key, url, payload, captured_at, expires_at)
+                VALUES (%s, %s, %s::jsonb, %s, %s)
+                ON CONFLICT (cache_key) DO UPDATE SET
+                    url = EXCLUDED.url,
+                    payload = EXCLUDED.payload,
+                    captured_at = EXCLUDED.captured_at,
+                    expires_at = EXCLUDED.expires_at
+                """,
+                (cache_key, url, json.dumps(payload), captured_at, expires_at),
+            )
+            conn.commit()
         return payload, False
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        with psycopg.connect(_db_url()) as conn:
+            conn.execute(
+                "DELETE FROM product_cache_locks WHERE cache_key = %s AND lock_token = %s",
+                (cache_key, lock_token),
+            )
+            conn.commit()
