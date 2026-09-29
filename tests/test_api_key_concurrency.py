@@ -33,6 +33,7 @@ class FakeConn:
 
 def test_consume_credit_locks_key_and_account_rows_together(monkeypatch):
     conn = FakeConn()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
     monkeypatch.setattr(monitor_store.psycopg, "connect", lambda *_args, **_kwargs: conn)
     monkeypatch.setattr(monitor_store, "_SCHEMA_READY", True)
 
