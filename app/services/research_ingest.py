@@ -77,6 +77,8 @@ def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 async def fetch_public_comments(url: str, max_comments: int = 500) -> dict:
+    if not isinstance(max_comments, int) or isinstance(max_comments, bool) or not 1 <= max_comments <= 500:
+        raise ValueError("max_comments must be between 1 and 500")
     current_url = await validate_public_url(url)
     parsed = urlparse(current_url)
     if parsed.scheme not in {"http", "https"}:
