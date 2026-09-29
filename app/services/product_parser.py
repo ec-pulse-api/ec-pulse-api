@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
-from app.services.url_safety import MAX_REDIRECTS, next_redirect, safe_async_client, validate_public_url
+from app.services.url_safety import MAX_REDIRECTS, next_redirect, read_response_bytes, safe_async_client, validate_public_url
 
 import httpx
 from bs4 import BeautifulSoup
@@ -120,9 +120,8 @@ async def fetch_product(url: str) -> dict[str, Any]:
         else:
             raise ValueError("Too many redirects")
 
-    if len(response.content) > MAX_RESPONSE_BYTES:
-        raise ValueError("Product page response is too large")
-    soup = BeautifulSoup(response.text, "html.parser")
+    body = await read_response_bytes(response, MAX_RESPONSE_BYTES)
+    soup = BeautifulSoup(body, "html.parser")
     product = _find_product(_jsonld(soup)) or {}
     offers = _offers_dict(product.get("offers"))
     final_url = str(response.url)
