@@ -75,15 +75,39 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
         return False
     event_id = subscription.get("_ec_pulse_event_id")
     state = conn.execute(
-        "SELECT last_stripe_event_created, last_stripe_event_id FROM api_accounts WHERE api_key_hash = %s FOR UPDATE",
+        """SELECT stripe_subscription_id, subscription_status,
+                  last_stripe_event_created, last_stripe_event_id
+           FROM api_accounts
+           WHERE api_key_hash = %s
+           FOR UPDATE""",
         (row[0],),
     ).fetchone()
-    if event_created is not None and state and state[0] is not None:
-        previous_created, _previous_event_id = state
-        # Stripe event IDs are opaque identifiers, not chronological keys.
-        # Equal-timestamp events are therefore not ordered by ID; the current
-        # subscription state fetched from Stripe is the source of truth.
-        if event_created < previous_created:
+    if event_created is not None and state:
+        previous_subscription_id, previous_status, previous_created, _previous_event_id = state
+        if previous_created is not None and event_created < previous_created:
+            return False
+        # A customer can have more than one Stripe subscription. Once this
+        # account is on a live subscription, a terminal event for a different
+        # (older) subscription must never replace the current subscription.
+        # This also protects against equal-timestamp events, whose IDs are not
+        # chronological and therefore cannot be used as a tie-breaker.
+        active_statuses = {"active", "trialing", "past_due"}
+        if (
+            previous_subscription_id
+            and subscription_id
+            and subscription_id != previous_subscription_id
+            and previous_status in active_statuses
+            and status not in active_statuses
+        ):
+            return False
+        if (
+            previous_subscription_id
+            and subscription_id
+            and subscription_id != previous_subscription_id
+            and previous_status in active_statuses
+            and previous_created is not None
+            and event_created <= previous_created
+        ):
             return False
     effective_plan = plan if status in {"active", "trialing", "past_due"} else None
     if effective_plan:
