@@ -18,6 +18,9 @@ SEARCH_URLS = {
 
 
 YAHOO_API_URL = "https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch"
+_YAHOO_REQUEST_LOCK = asyncio.Lock()
+_YAHOO_MIN_INTERVAL_SECONDS = 1.05
+_yahoo_last_request_at = 0.0
 
 
 def _yahoo_item(item: dict) -> dict:
@@ -65,8 +68,8 @@ async def _search_rakuten_official(query: str, limit: int) -> list[dict]:
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.get(
             RAKUTEN_API_URL,
-            params={"applicationId": app_id, "accessKey": access_key, "format": "json", "formatVersion": 2, "keyword": query, "hits": min(limit, 30), "sort": "+itemPrice"},
-            headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12"},
+            params={"applicationId": app_id, "format": "json", "formatVersion": 2, "keyword": query, "hits": min(limit, 30), "sort": "+itemPrice"},
+            headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12", "accessKey": access_key},
         )
         response.raise_for_status()
         payload = response.json()
@@ -80,10 +83,34 @@ async def _search_yahoo_official(query: str, limit: int) -> list[dict]:
     app_id = os.getenv("YAHOO_SHOPPING_APP_ID")
     if not app_id:
         raise RuntimeError("YAHOO_SHOPPING_APP_ID is not configured")
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.get(YAHOO_API_URL, params={"appid": app_id, "query": query, "results": min(limit, 50), "sort": "+price"}, headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12"})
-        response.raise_for_status()
-        payload = response.json()
+    global _yahoo_last_request_at
+    async with _YAHOO_REQUEST_LOCK:
+        now = asyncio.get_running_loop().time()
+        wait = _YAHOO_MIN_INTERVAL_SECONDS - (now - _yahoo_last_request_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                YAHOO_API_URL,
+                params={"appid": app_id, "query": query, "results": min(limit, 50), "sort": "+price"},
+                headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12"},
+            )
+            _yahoo_last_request_at = asyncio.get_running_loop().time()
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    delay = min(float(retry_after), 5.0) if retry_after else 1.1
+                except ValueError:
+                    delay = 1.1
+                await asyncio.sleep(delay)
+                response = await client.get(
+                    YAHOO_API_URL,
+                    params={"appid": app_id, "query": query, "results": min(limit, 50), "sort": "+price"},
+                    headers={"Accept": "application/json", "User-Agent": "EC-Pulse/0.12"},
+                )
+                _yahoo_last_request_at = asyncio.get_running_loop().time()
+            response.raise_for_status()
+            payload = response.json()
     hits = payload.get("hits", [])
     if not isinstance(hits, list):
         raise ValueError("Invalid Yahoo Shopping API response")
