@@ -210,6 +210,10 @@ def provision_customer_api_key(user_id: str, rotate: bool = False) -> dict:
     now = datetime.now(timezone.utc)
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
+        # Serialize provisioning/rotation for the same authenticated customer.
+        # This closes the first-login race where two requests could both observe
+        # no account before the unique customer_user_id index is enforced.
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (user_id,))
         row = conn.execute(
             "SELECT api_key_hash, plan, credits_balance FROM api_accounts WHERE customer_user_id = %s FOR UPDATE",
             (user_id,),
