@@ -1,0 +1,15 @@
+{
+  "name": "ec-pulse",
+  "owner": {
+    "name": "EC Pulse API"
+  },
+  "metadata": {
+    "description": "EC Pulse Claude Code plugin for Japanese e-commerce product data, research, price monitoring, and consumer insights."
+  },
+  "plugins": [
+    {
+      "name": "ec-pulse",
+      "source": "./plugins/ec-pulse"
+    }
+  ]
+}
