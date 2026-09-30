@@ -64,17 +64,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          body="## EC Pulse Patrol AI report
-
-          Self-contained patrol executed without requiring an external AI credential.
-
-          ### Initial patrol
-          ```json
-          $(cat patrol-report.json 2>/dev/null || echo '{"status":"NOT_VERIFIED"}')
-          ```
-
-          ### Re-audit
-          ```json
-          $(cat patrol-reaudit.json 2>/dev/null || echo '{"status":"NOT_VERIFIED"}')
-          ```"
-          gh issue create --title "Patrol AI report" --body "$body"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          initial = Path('patrol-report.json').read_text() if Path('patrol-report.json').exists() else '{"status":"NOT_VERIFIED"}'
+          reaudit = Path('patrol-reaudit.json').read_text() if Path('patrol-reaudit.json').exists() else '{"status":"NOT_VERIFIED"}'
+          body = '## EC Pulse Patrol AI report\n\nSelf-contained patrol executed without an external AI credential.\n\n### Initial patrol\n```json\n' + initial + '\n```\n\n### Re-audit\n```json\n' + reaudit + '\n```'
+          Path('patrol-issue-body.md').write_text(body)
+          PY
+          gh issue create --title "Patrol AI report" --body-file patrol-issue-body.md
