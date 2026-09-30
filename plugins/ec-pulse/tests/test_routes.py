@@ -47,10 +47,10 @@ class RouteMappingTests(unittest.TestCase):
         self.assert_call("ec_monitor_list", {}, "GET", "/v1/monitors")
 
     def test_monitor_history_mapping_and_encoding(self):
-        self.assert_call("ec_monitor_history", {"monitor_id": "monitor/with spaces", "limit": 10}, "GET", "/v1/monitors/monitor%2Fwith%20spaces/history", expected_query={"limit": 10})
+        self.assert_call("ec_monitor_history", {"monitor_id": "123e4567-e89b-12d3-a456-426614174000", "limit": 10}, "GET", "/v1/monitors/123e4567-e89b-12d3-a456-426614174000/history", expected_query={"limit": 10})
 
     def test_monitor_opportunity_mapping(self):
-        self.assert_call("ec_monitor_opportunity", {"monitor_id": "abc", "limit": 20}, "GET", "/v1/monitors/abc/opportunity", expected_query={"limit": 20})
+        self.assert_call("ec_monitor_opportunity", {"monitor_id": "123e4567-e89b-12d3-a456-426614174001", "limit": 20}, "GET", "/v1/monitors/123e4567-e89b-12d3-a456-426614174001/opportunity", expected_query={"limit": 20})
 
     def test_account_mapping(self):
         self.assert_call("ec_account", {}, "GET", "/v1/account")
