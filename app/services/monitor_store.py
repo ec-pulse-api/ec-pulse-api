@@ -376,6 +376,86 @@ def get_account_usage(api_key: str) -> dict:
         },
     }
 
+def get_customer_usage(user_id: str, days: int = 30) -> dict:
+    user_id = user_id.strip()
+    days = max(1, min(days, 365))
+    if not user_id or len(user_id) > 255:
+        raise ValueError("Invalid customer user id")
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        account = conn.execute(
+            """SELECT plan, credits_balance, created_at, updated_at
+               FROM api_accounts WHERE customer_user_id = %s""",
+            (user_id,),
+        ).fetchone()
+        if not account:
+            raise RuntimeError("Customer account is not provisioned")
+        rows = conn.execute(
+            """SELECT u.endpoint,
+                      COALESCE(SUM(u.credits), 0) AS credits,
+                      COUNT(*) AS requests,
+                      COUNT(*) FILTER (WHERE u.credits > 0) AS billable_requests
+               FROM api_usage u
+               JOIN api_keys k ON k.api_key_hash = u.api_key_hash
+               JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+               WHERE a.customer_user_id = %s
+                 AND u.created_at >= CURRENT_TIMESTAMP - (%s * INTERVAL '1 day')
+               GROUP BY u.endpoint
+               ORDER BY credits DESC, requests DESC""",
+            (user_id, days),
+        ).fetchall()
+        daily = conn.execute(
+            """SELECT DATE(u.created_at) AS day,
+                      COALESCE(SUM(u.credits), 0),
+                      COUNT(*)
+               FROM api_usage u
+               JOIN api_keys k ON k.api_key_hash = u.api_key_hash
+               JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+               WHERE a.customer_user_id = %s
+                 AND u.created_at >= CURRENT_TIMESTAMP - (%s * INTERVAL '1 day')
+               GROUP BY DATE(u.created_at)
+               ORDER BY day DESC""",
+            (user_id, days),
+        ).fetchall()
+        key_rows = conn.execute(
+            """SELECT k.key_prefix, k.active, COALESCE(SUM(u.credits), 0), COUNT(u.id)
+               FROM api_keys k
+               JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+               LEFT JOIN api_usage u ON u.api_key_hash = k.api_key_hash
+                 AND u.created_at >= CURRENT_TIMESTAMP - (%s * INTERVAL '1 day')
+               WHERE a.customer_user_id = %s
+               GROUP BY k.key_prefix, k.active, k.created_at
+               ORDER BY k.created_at DESC""",
+            (days, user_id),
+        ).fetchall()
+    total_credits = sum(int(row[1]) for row in rows)
+    total_requests = sum(int(row[2]) for row in rows)
+    return {
+        "plan": account[0],
+        "credits_balance": account[1],
+        "window_days": days,
+        "window_start": (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(),
+        "total_credits_used": total_credits,
+        "total_requests": total_requests,
+        "by_endpoint": [
+            {"endpoint": row[0], "credits": int(row[1]), "requests": int(row[2]), "billable_requests": int(row[3])}
+            for row in rows
+        ],
+        "daily": [
+            {"date": row[0].isoformat(), "credits": int(row[1]), "requests": int(row[2])}
+            for row in daily
+        ],
+        "by_key": [
+            {"key_prefix": row[0], "active": row[1], "credits": int(row[2]), "requests": int(row[3])}
+            for row in key_rows
+        ],
+        "account": {
+            "created_at": account[2].isoformat(),
+            "updated_at": account[3].isoformat(),
+        },
+    }
+
+
 def create_monitor(api_key: str, url: str, interval_minutes: int, webhook_url: str) -> dict:
     now = datetime.now(timezone.utc); monitor_id = str(uuid.uuid4()); owner = _account_hash(api_key)
     with psycopg.connect(_db_url()) as conn:
