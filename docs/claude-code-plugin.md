@@ -51,6 +51,10 @@ Primary use cases:
 
 The plugin does not expose EC Pulse secrets. The customer's API key remains in the local process environment and is sent only to the configured EC Pulse API.
 
+## Local marketplace installation
+
+The repository includes `.claude-plugin/marketplace.json` so a checkout can be used as a Claude Code marketplace source.
+
 ## Marketplace submission
 
 Anthropic's September 25, 2026 submission flow accepts GitHub-hosted plugin bundles containing MCP servers and skills; Claude Code bundles may also include commands, hooks, agents, and LSPs. The submission portal performs automated validation and safety scanning before review.
