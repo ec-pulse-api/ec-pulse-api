@@ -260,6 +260,8 @@ def _handle(message: Any) -> dict[str, Any] | None:
             return {"jsonrpc": "2.0", "id": request_id, "result": _tool_error(f"Unexpected plugin error: {type(exc).__name__}")}
     if method is None:
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": "Invalid Request"}}
+    if request_id is None:
+        return None
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}}
 
 def main() -> None:
