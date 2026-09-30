@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import sys
@@ -92,6 +93,17 @@ def _validate_url(value: Any) -> str:
         raise ValueError("URL must be an absolute http(s) URL")
     if parsed.username or parsed.password:
         raise ValueError("URL credentials are not allowed")
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not host:
+        raise ValueError("URL host is required")
+    if host in {"localhost", "localhost.localdomain", "ip6-localhost"}:
+        raise ValueError("Local/private destinations are not allowed")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and (address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast or address.is_reserved):
+        raise ValueError("Local/private destinations are not allowed")
     return value
 
 def _validate_args(name: str, args: Any) -> dict[str, Any]:
@@ -187,12 +199,10 @@ def _api_request(method: str, path: str, *, body: dict[str, Any] | None = None, 
         if 400 <= exc.code < 500:
             raise RuntimeError(f"EC Pulse request was rejected ({exc.code})") from exc
         raise RuntimeError(f"EC Pulse upstream service error ({exc.code})") from exc
-    except HTTPError:
-        raise
     except URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise RuntimeError("EC Pulse request timed out") from exc
         raise RuntimeError(f"EC Pulse connection failed ({type(exc.reason).__name__})") from exc
-    except TimeoutError as exc:
-        raise RuntimeError("EC Pulse request timed out") from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError("EC Pulse returned invalid JSON") from exc
 
