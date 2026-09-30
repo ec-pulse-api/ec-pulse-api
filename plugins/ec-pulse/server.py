@@ -87,12 +87,35 @@ def _base_url() -> str:
         raise RuntimeError("EC_PULSE_API_BASE_URL must be a valid http(s) URL")
     if parsed.username or parsed.password:
         raise RuntimeError("EC_PULSE_API_BASE_URL must not contain URL credentials")
-    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-        raise RuntimeError("Non-local EC_PULSE_API_BASE_URL must use HTTPS")
     if parsed.query or parsed.fragment:
         raise RuntimeError("EC_PULSE_API_BASE_URL must not contain query or fragment")
     if parsed.path not in {"", "/"}:
         raise RuntimeError("EC_PULSE_API_BASE_URL must not contain an API path prefix")
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not host:
+        raise RuntimeError("EC_PULSE_API_BASE_URL must contain a host")
+    local_hosts = {"localhost", "localhost.localdomain", "ip6-localhost", "127.0.0.1", "::1"}
+    if parsed.scheme == "http" and host not in local_hosts:
+        raise RuntimeError("Non-local EC_PULSE_API_BASE_URL must use HTTPS")
+    if host not in local_hosts:
+        try:
+            address = ipaddress.ip_address(host)
+            addresses = [address]
+        except ValueError:
+            try:
+                resolved = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+            except OSError as exc:
+                raise RuntimeError("EC_PULSE_API_BASE_URL host could not be resolved safely") from exc
+            addresses = []
+            for item in resolved:
+                try:
+                    addresses.append(ipaddress.ip_address(item[4][0]))
+                except (ValueError, IndexError) as exc:
+                    raise RuntimeError("EC_PULSE_API_BASE_URL resolved to an invalid address") from exc
+            if not addresses:
+                raise RuntimeError("EC_PULSE_API_BASE_URL host could not be resolved safely")
+        if any(address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast or address.is_reserved for address in addresses):
+            raise RuntimeError("EC_PULSE_API_BASE_URL must not target a local/private destination")
     return value
 
 def _validate_url(value: Any) -> str:
