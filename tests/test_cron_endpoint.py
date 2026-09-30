@@ -54,3 +54,42 @@ def test_cron_monitor_endpoint_rejects_wrong_secret(monkeypatch):
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Unauthorized"
+
+
+def test_patrol_endpoint_requires_secret(monkeypatch):
+    monkeypatch.setenv("CRON_SECRET", "test-secret")
+    client = TestClient(main.app)
+
+    response = client.get("/api/cron/patrol")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Unauthorized"
+
+
+def test_patrol_endpoint_reports_patrol_result(monkeypatch):
+    monkeypatch.setenv("CRON_SECRET", "test-secret")
+
+    async def fake_run_patrol():
+        return {
+            "ok": True,
+            "agent": "patrol-ai",
+            "mode": "observe-repair-report",
+            "checks": [{"name": "database", "ok": True}],
+            "repairs": [],
+            "failures": [],
+        }
+
+    monkeypatch.setattr(main, "run_patrol", fake_run_patrol)
+    client = TestClient(main.app)
+
+    response = client.get(
+        "/api/cron/patrol",
+        headers={"Authorization": "Bearer test-secret"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["agent"] == "patrol-ai"
+    assert body["mode"] == "observe-repair-report"
+    assert body["failures"] == []
