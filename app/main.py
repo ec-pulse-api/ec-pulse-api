@@ -616,6 +616,28 @@ def account(request: Request, response: Response, api_key: str = Depends(get_api
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+@app.get("/api/cron/patrol/latest")
+async def patrol_latest(authorization: str | None = Header(default=None), limit: int = Query(default=10, ge=1, le=50)):
+    secret = os.getenv("CRON_SECRET")
+    if not secret or not authorization or not secrets.compare_digest(authorization, f"Bearer {secret}"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        from app.services.monitor_store import _db_url
+        with psycopg.connect(_db_url(), connect_timeout=3) as conn:
+            rows = conn.execute(
+                "SELECT id, checked_at, ok, report FROM patrol_reports ORDER BY checked_at DESC LIMIT %s",
+                (limit,),
+            ).fetchall()
+        return {
+            "count": len(rows),
+            "reports": [
+                {"id": row[0], "checked_at": row[1].isoformat(), "ok": row[2], "report": row[3]}
+                for row in rows
+            ],
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Patrol report unavailable: {type(exc).__name__}") from exc
+
 @app.get("/api/cron/patrol")
 async def patrol(authorization: str | None = Header(default=None)):
     secret = os.getenv("CRON_SECRET")
