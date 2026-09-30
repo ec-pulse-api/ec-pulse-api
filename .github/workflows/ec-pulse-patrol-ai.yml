@@ -1,0 +1,144 @@
+name: EC Pulse Patrol AI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/ec-pulse-patrol-ai
+    paths:
+      - "scripts/ec_pulse_patrol.py"
+      - ".github/workflows/ec-pulse-patrol-ai.yml"
+      - "plugins/ec-pulse/**"
+      - "app/**"
+      - "tests/**"
+      - "docs/legal/**"
+      - "vercel.json"
+      - ".gitignore"
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ec-pulse-patrol-ai
+  cancel-in-progress: false
+
+jobs:
+  patrol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout target ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Check GitHub deployment status
+        id: deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          state=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/status" --jq '.state')
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "Deployment/status state: $state"
+          if [ "$state" = "failure" ]; then
+            echo "::warning::GitHub commit status reports deployment failure; patrol will report it."
+          fi
+      - name: Patrol and safe self-repair
+        id: patrol
+        shell: bash
+        run: |
+          set +e
+          python scripts/ec_pulse_patrol.py --repair > patrol.json
+          status=$?
+          set -e
+          cat patrol.json
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo '### EC Pulse Patrol AI'
+            echo
+            cat patrol.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run plugin tests
+        id: plugin_tests
+        run: python -m unittest discover -s plugins/ec-pulse/tests -v
+
+      - name: Run repository tests
+        id: repo_tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Check patch hygiene
+        id: hygiene
+        run: git diff --check
+
+      - name: Publish repair PR or issue
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PATROL_STATUS: ${{ steps.patrol.outputs.status }}
+          PLUGIN_TESTS: ${{ steps.plugin_tests.outcome }}
+          REPO_TESTS: ${{ steps.repo_tests.outcome }}
+          HYGIENE: ${{ steps.hygiene.outcome }}
+          DEPLOYMENT: ${{ steps.deployment.outputs.state }}
+        shell: bash
+        run: |
+          set -e
+          tests_ok=false
+          if [ "$PLUGIN_TESTS" = "success" ] && [ "$REPO_TESTS" = "success" ] && [ "$HYGIENE" = "success" ]; then
+            tests_ok=true
+          fi
+
+          if [ "$tests_ok" = "true" ] && [ "$PATROL_STATUS" = "0" ] && ! git diff --quiet; then
+            branch="patrol/repair-${GITHUB_RUN_ID}"
+            git switch -c "$branch"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore: apply EC Pulse patrol repairs"
+            git push --set-upstream origin "$branch"
+            gh pr create --base main --head "$branch" --title "chore: EC Pulse Patrol AI repairs" --body "Automated by EC Pulse Patrol AI. Safe mechanical repairs were applied and plugin/repository tests passed. This PR is intentionally not auto-merged. See the workflow run summary for findings."
+            exit 0
+          fi
+
+          needs_report=false
+          if [ "$PATROL_STATUS" != "0" ] || [ "$tests_ok" != "true" ] || [ "$DEPLOYMENT" = "failure" ]; then
+            needs_report=true
+          fi
+          if [ "$needs_report" = "true" ]; then
+            existing=$(gh issue list --state open --search '"[Patrol AI] unresolved EC Pulse repository issue"' --json number --jq '.[0].number // empty')
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "```json
+$(cat patrol.json)
+```
+Plugin tests: $PLUGIN_TESTS
+Repository tests: $REPO_TESTS
+Patch hygiene: $HYGIENE
+Deployment status: $DEPLOYMENT"
+            else
+              gh issue create --title "[Patrol AI] unresolved EC Pulse repository issue" --body "```json
+$(cat patrol.json)
+```
+
+Plugin tests: $PLUGIN_TESTS
+Repository tests: $REPO_TESTS
+Patch hygiene: $HYGIENE"
+            fi
+            exit 1
+          fi
+
+          echo "No repair required."
