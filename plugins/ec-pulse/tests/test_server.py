@@ -27,6 +27,8 @@ class MCPProtocolTests(unittest.TestCase):
         self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"tools/list","params":{}}))
         with patch.object(server, "_call_tool", return_value={"ok": True}):
             self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"tools/call","params":{"name":"ec_account","arguments":{}}}))
+        self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"tools/call","params":None}))
+        self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"tools/call","params":{"name":"nope","arguments":{}}}))
 
     def test_ping(self):
         self.assertEqual(server._handle({"jsonrpc":"2.0","id":8,"method":"ping","params":{}}), {"jsonrpc":"2.0","id":8,"result":{}})
@@ -104,6 +106,11 @@ class SecurityTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, r"429.*Retry-After: 30"):
                 server._api_request("GET", "/v1/account")
+
+    def test_base_url_rejects_credentials(self):
+        with patch.dict(os.environ, {"EC_PULSE_API_BASE_URL": "https://user:pass@example.com"}, clear=True):
+            with self.assertRaises(RuntimeError):
+                server._base_url()
 
     def test_signature(self):
         self.assertEqual(len(server._sign("secret","1700000000","POST","/v1/products/search",b"{}")),71)
