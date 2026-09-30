@@ -1,0 +1,19 @@
+{
+  "name": "ec-pulse",
+  "description": "EC Pulse tools for Japanese e-commerce product data, price monitoring, research, consumer insights, and opportunity discovery.",
+  "version": "0.1.0",
+  "author": {
+    "name": "EC Pulse API"
+  },
+  "homepage": "https://ec-pulse-api.vercel.app",
+  "repository": "https://github.com/ec-pulse-api/ec-pulse-api",
+  "license": "MIT",
+  "keywords": [
+    "ecommerce",
+    "japan",
+    "product-research",
+    "price-monitoring",
+    "market-research",
+    "commerce"
+  ]
+}
