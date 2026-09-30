@@ -23,7 +23,7 @@ It runs:
 python -m unittest discover -s plugins/ec-pulse/tests -v
 ```
 
-The current audited commit `e416ac269b53a8b7e97adebdb15c6ab8f4cba665` was verified through GitHub Actions: plugin test run `36733477031` completed successfully. The repository-wide test run `36733477138` also completed successfully. The current-head Vercel GitHub status is SUCCESS.
+The current audited commit `c9f7c54d96c5fcae785f9e8d0031992f80985e8d` was verified through GitHub Actions: plugin test run `36733563325` completed successfully. The repository-wide test run `36733563889` also completed successfully. The current-head Vercel status is NOT VERIFIED.
 
 ## Live smoke test
 

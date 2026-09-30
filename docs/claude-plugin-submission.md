@@ -54,7 +54,7 @@ The legal documents still contain `［要入力］` placeholders and therefore m
 
 Production smoke testing is also not marked PASS because no production `EC_PULSE_API_KEY` is available to the test runner. Unauthenticated production reachability has been verified separately (`/` 200, `/health` 200 with database `ok`, `/v1/account` 401 without a key).
 
-The current PR head is `e416ac269b53a8b7e97adebdb15c6ab8f4cba665`. GitHub Actions for this exact commit are PASS (plugin run `36733477031`, repository tests run `36733477138`). A Vercel GitHub status for this exact head is not currently verified; the visible READY deployment comment refers to an older PR commit, so it is not used as proof of current-head deployment health.
+The current PR head is `c9f7c54d96c5fcae785f9e8d0031992f80985e8d`. GitHub Actions for this exact commit are PASS (plugin run `36733563325`, repository tests run `36733563889`). A Vercel GitHub status for this exact head is **NOT VERIFIED**; an older READY deployment is not used as proof of current-head deployment health.
 
 ## Evaluation status
 
@@ -65,8 +65,8 @@ The current PR head is `e416ac269b53a8b7e97adebdb15c6ab8f4cba665`. GitHub Action
 - Credit shortage: NOT RUN
 - Invalid/private URL: NOT RUN against production; local literal-private validation is covered by unit tests
 - API authentication failure: NOT RUN against production
-- MCP protocol/security: PASS on current PR head `e416ac269b53a8b7e97adebdb15c6ab8f4cba665` (GitHub Actions run `36733477031`)
-- Repository-wide tests: PASS on current PR head `e416ac269b53a8b7e97adebdb15c6ab8f4cba665` (GitHub Actions run `36733477138`)
+- MCP protocol/security: PASS on current PR head `c9f7c54d96c5fcae785f9e8d0031992f80985e8d` (GitHub Actions run `36733563325`)
+- Repository-wide tests: PASS on current PR head `c9f7c54d96c5fcae785f9e8d0031992f80985e8d` (GitHub Actions run `36733563889`)
 - Vercel current-head status: NOT VERIFIED
 
 Never mark a case PASS without an actual recorded run.
