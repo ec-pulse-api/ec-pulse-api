@@ -245,7 +245,7 @@ def _call_tool(name: str, args: Any) -> Any:
     if name == "ec_research_runs":
         return _api_request("GET", "/v1/research/runs", query={"url": args.get("url"), "limit": args.get("limit", 20)})
     if name == "ec_research_opportunity":
-        return _api_request("GET", f"/v1/research/runs/{quote(args[\"run_id\"], safe=\"\")}/opportunity")
+        return _api_request("GET", f"/v1/research/runs/{quote(args['run_id'], safe='')}/opportunity")
     raise ValueError("Unknown tool")
 
 def _tool_error(message: str) -> dict[str, Any]:
