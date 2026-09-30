@@ -88,9 +88,12 @@ def test_billing_success_does_not_expose_checkout_session_id(monkeypatch):
         def __exit__(self, *args):
             pass
 
+    import app.services.monitor_store as monitor_store
+
     monkeypatch.setattr(main, "current_user", fake_current_user)
+    monkeypatch.setattr(monitor_store, "_init", lambda conn: None)
+    monkeypatch.setattr(monitor_store, "_db_url", lambda: "postgresql://test/test")
     monkeypatch.setattr(main.psycopg, "connect", lambda *args, **kwargs: Conn())
-    monkeypatch.setattr(main, "_db_url", lambda: "postgresql://test/test")
 
     response = TestClient(main.app).get(
         "/billing/success?session_id=cs_sensitive",
