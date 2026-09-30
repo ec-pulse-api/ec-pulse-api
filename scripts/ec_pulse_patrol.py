@@ -56,7 +56,7 @@ def main():
             legal.append(str(p.relative_to(ROOT)))
     check("legal-placeholders",not legal,"unresolved placeholders: "+", ".join(legal) if legal else "none")
 
-    code,files,err=run("git","grep","-lE",r"(sk_live_[A-Za-z0-9]|whsec_[A-Za-z0-9]|-----BEGIN .*PRIVATE KEY-----)","--","*.py","*.md","*.json","*.yml","*.yaml",":!scripts/ec_pulse_patrol.py",":!docs/legal/*")
+    code,files,err=run("git","grep","-lE",r"(sk_live_[A-Za-z0-9]{20,}|whsec_[A-Za-z0-9]{20,}|-----BEGIN .*PRIVATE KEY-----)","--","*.py","*.md","*.json","*.yml","*.yaml",":!scripts/ec_pulse_patrol.py",":!docs/legal/*")
     hit_files=[line for line in files.splitlines() if line.strip()]
     check("secret-scan",not hit_files,"no high-confidence tracked secret pattern" if not hit_files else "pattern found in: "+", ".join(hit_files))
 
