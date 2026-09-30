@@ -11,7 +11,7 @@
 
 ## Current implementation
 
-- 10 MCP tools
+- 12 MCP tools
 - 3 Claude Code commands
 - 3 Agent Skills
 - MCP JSON-RPC protocol handling
@@ -65,6 +65,6 @@ The existing repository's Vercel status currently reports `build-rate-limit`. Th
 - Credit shortage: NOT RUN
 - Invalid/private URL: NOT RUN against production; local literal-private validation is covered by unit tests
 - API authentication failure: NOT RUN against production
-- MCP protocol: automated test suite added; execution result not available from the connected GitHub status interface
+- MCP protocol: GitHub Actions plugin test suite PASS on PR #5 head
 
 Never mark a case PASS without an actual recorded run.
