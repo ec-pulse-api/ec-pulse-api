@@ -280,8 +280,8 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
 @app.get("/v1/pricing", tags=["billing"])
 def pricing():
     return {
-        "currency": "USD",
         "billing": "credit_based",
+        "pricing_source": "stripe",
         "plans": {
             "free": {"credits": 100, "rate_limit_per_minute": 30},
             "pro": {"credits": "configurable", "rate_limit_per_minute": 300},
