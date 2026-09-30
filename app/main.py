@@ -272,9 +272,7 @@ async def customer_keys(http_request: Request):
 
 
 @app.post("/v1/customer/keys/revoke", tags=["customer"])
-async def customer_revoke_key(key_prefix: str = Query(..., min_length=8, max_length=32), http_request: Request = None):
-    if http_request is None:
-        raise HTTPException(status_code=400, detail="Request is required")
+async def customer_revoke_key(http_request: Request, key_prefix: str = Query(..., min_length=8, max_length=32)):
     user = await current_user(http_request)
     user_id = user.get("id")
     if not user_id:
