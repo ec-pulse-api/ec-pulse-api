@@ -1,6 +1,19 @@
 name: EC Pulse Patrol AI
 
 on:
+  push:
+    branches:
+      - main
+      - feat/ec-pulse-patrol-ai
+    paths:
+      - "scripts/ec_pulse_patrol.py"
+      - ".github/workflows/ec-pulse-patrol-ai.yml"
+      - "plugins/ec-pulse/**"
+      - "app/**"
+      - "tests/**"
+      - "docs/legal/**"
+      - "vercel.json"
+      - ".gitignore"
   schedule:
     - cron: "17 */6 * * *"
   workflow_dispatch:
@@ -19,10 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout main
+      - name: Checkout target ref
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.ref_name }}
           fetch-depth: 1
 
       - name: Set up Python
@@ -73,9 +86,9 @@ jobs:
             git add -A
             git commit -m "chore: apply EC Pulse patrol repairs"
             git push --set-upstream origin "$branch"
-            gh pr create               --base main               --head "$branch"               --title "chore: EC Pulse Patrol AI repairs"               --body "Automated by EC Pulse Patrol AI. Safe mechanical repairs were applied and repository tests passed. This PR is intentionally not auto-merged. See the workflow run summary for findings."
+            gh pr create --base main --head "$branch" --title "chore: EC Pulse Patrol AI repairs" --body "Automated by EC Pulse Patrol AI. Safe mechanical repairs were applied and repository tests passed. This PR is intentionally not auto-merged. See the workflow run summary for findings."
           elif [ "$PATROL_STATUS" != "0" ]; then
-            gh issue create               --title "[Patrol AI] unresolved EC Pulse repository issue"               --body-file patrol.json
+            gh issue create --title "[Patrol AI] unresolved EC Pulse repository issue" --body-file patrol.json
             exit 1
           else
             echo "No repair required."
