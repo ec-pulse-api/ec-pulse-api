@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
@@ -66,6 +67,8 @@ TOOLS = [
         "limit": {"type": "integer", "minimum": 2, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_account", "Return the authenticated account plan, remaining credits, and usage summary. The raw API key is never returned.", {}),
+    _tool("ec_research_runs", "List research runs owned by the authenticated EC Pulse account.", {"url": {"type": "string", "maxLength": 2000}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
+    _tool("ec_research_opportunity", "Analyze one research run and return product opportunity candidates.", {"run_id": {"type": "string", "minLength": 1, "maxLength": 100}}, ["run_id"]),
 ]
 
 TOOL_MAP = {t["name"]: t for t in TOOLS}
@@ -149,10 +152,19 @@ def _validate_args(name: str, args: Any) -> dict[str, Any]:
         interval = args.get("interval_minutes", 60)
         if isinstance(interval, bool) or not isinstance(interval, int) or not 5 <= interval <= 10080:
             raise ValueError("interval_minutes must be between 5 and 10080")
+    elif name == "ec_research_runs":
+        limit = args.get("limit", 20)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+    elif name == "ec_research_opportunity":
+        try: uuid.UUID(args.get("run_id", ""))
+        except (ValueError, TypeError, AttributeError): raise ValueError("run_id must be a valid UUID")
     elif name in {"ec_monitor_history", "ec_monitor_opportunity"}:
         monitor_id = args.get("monitor_id")
         if not isinstance(monitor_id, str) or not 1 <= len(monitor_id) <= 200:
             raise ValueError("monitor_id must be 1-200 characters")
+        try: uuid.UUID(monitor_id)
+        except (ValueError, AttributeError): raise ValueError("monitor_id must be a valid UUID")
         if "limit" in args:
             limit = args["limit"]
             minimum = 2 if name == "ec_monitor_opportunity" else 1
@@ -195,7 +207,9 @@ def _api_request(method: str, path: str, *, body: dict[str, Any] | None = None, 
         if exc.code == 404:
             raise RuntimeError("EC Pulse resource was not found (404)") from exc
         if exc.code == 429:
-            raise RuntimeError("EC Pulse rate limit exceeded (429)") from exc
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            suffix = f"; Retry-After: {retry_after}" if retry_after else ""
+            raise RuntimeError(f"EC Pulse rate limit exceeded (429){suffix}") from exc
         if 400 <= exc.code < 500:
             raise RuntimeError(f"EC Pulse request was rejected ({exc.code})") from exc
         raise RuntimeError(f"EC Pulse upstream service error ({exc.code})") from exc
@@ -228,6 +242,10 @@ def _call_tool(name: str, args: Any) -> Any:
         return _api_request("GET", f"/v1/monitors/{quote(args['monitor_id'], safe='')}/opportunity", query={"limit": args.get("limit", 100)})
     if name == "ec_account":
         return _api_request("GET", "/v1/account")
+    if name == "ec_research_runs":
+        return _api_request("GET", "/v1/research/runs", query={"url": args.get("url"), "limit": args.get("limit", 20)})
+    if name == "ec_research_opportunity":
+        return _api_request("GET", f"/v1/research/runs/{quote(args[\"run_id\"], safe=\"\")}/opportunity")
     raise ValueError("Unknown tool")
 
 def _tool_error(message: str) -> dict[str, Any]:
@@ -238,8 +256,10 @@ def _handle(message: Any) -> dict[str, Any] | None:
         return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}
     method = message.get("method")
     request_id = message.get("id")
-    if method == "notifications/initialized":
+    if method in {"notifications/initialized", "notifications/cancelled"}:
         return None
+    if method == "ping":
+        return None if request_id is None else {"jsonrpc": "2.0", "id": request_id, "result": {}}
     if method == "initialize":
         return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "ec-pulse", "version": "0.1.0"}}}
     if method == "tools/list":
