@@ -24,7 +24,7 @@ EC Pulse turns Japanese marketplace product pages and search results into normal
 | Pro | configurable | 300 req/min |
 | Business | configurable | 3000 req/min |
 
-Plan limits, Stripe checkout, subscription synchronization, credit accounting, and usage tracking are implemented; the remaining commercial layer is self-service key management and customer-facing dashboard/docs.
+Plan limits, Stripe checkout, subscription synchronization, credit accounting, usage tracking, Google login, and self-service customer API-key provisioning are implemented. A customer can authenticate, issue a free API key, use the API, and start a Pro/Business Stripe checkout without administrator intervention.
 
 ## Core endpoints
 
@@ -46,9 +46,19 @@ Plan limits, Stripe checkout, subscription synchronization, credit accounting, a
 - `POST /v1/billing/cancel`
 - `POST /api/stripe/webhook`
 
+## Customer onboarding
+
+1. Open `GET /auth/google` and complete Google authentication.
+2. Call `POST /v1/customer/key` to issue the first free API key.
+3. Store the returned `api_key` securely; it is shown only when the key is created.
+4. Send the key as `X-API-Key: <customer-key>` to metered endpoints.
+5. Call `POST /v1/billing/checkout?plan=pro` or `POST /v1/billing/checkout?plan=business` to start Stripe Checkout.
+6. Use `GET /v1/account` for API usage and `POST /v1/billing/portal` for Stripe billing management.
+7. If the key is lost, call `POST /v1/customer/key` with `{"rotate":true}` to revoke the old active key and issue a new one for the same customer account.
+
 ## Authentication
 
-Send:
+API requests send:
 
 `X-API-Key: <customer-key>`
 
@@ -87,13 +97,14 @@ EC Pulse API
 PostgreSQL
 ```
 
-## Next commercial layer
+## Commercial launch checklist
 
-1. Automatic monthly credit grants / top-ups
-2. Customer dashboard
-3. API key self-service
-4. Public API documentation
-5. TRACER integration
+1. Configure production Stripe secret, webhook secret, Pro/Business Price IDs, and `APP_BASE_URL`.
+2. Configure Supabase Google OAuth and `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY`.
+3. Configure the PostgreSQL `DATABASE_URL`.
+4. Replace all legal-document placeholders before public sales.
+5. Configure `CRON_SECRET` in the production scheduler so monitor checks run automatically.
+6. Publish `/docs` as the API reference and provide customer onboarding instructions.
 
 ## Legal documents
 
