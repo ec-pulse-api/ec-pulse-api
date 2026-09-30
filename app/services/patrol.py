@@ -7,6 +7,7 @@ import psycopg
 
 from app.services.product_search import search_products
 from app.services.monitor_store import run_due_monitors, _db_url
+from app.services.patrol_ai import diagnose
 
 
 def _store_report(report: dict) -> None:
@@ -81,11 +82,32 @@ async def run_patrol() -> dict:
             repairs.append({"type": "monitor-failure", "action": "escalate", "error": type(retry_exc).__name__})
 
     failures = [item for item in checks if item.get("ok") is False]
+    diagnosis = await diagnose(checks, repairs)
+
+    # Execute only allowlisted AI actions. No arbitrary code or shell execution.
+    if "retry_monitors" in diagnosis.get("actions", []) and not any(r.get("type") == "monitor-retry" for r in repairs):
+        try:
+            retry_result = await run_due_monitors()
+            repairs.append({"type": "ai-monitor-retry", "action": "retry_monitors", "result": retry_result})
+            checks.append({"name": "ai-monitor-retry", "ok": True, "result": retry_result})
+        except Exception as exc:
+            repairs.append({"type": "ai-monitor-retry-failure", "action": "escalate", "error": type(exc).__name__})
+    if "retry_search" in diagnosis.get("actions", []) and not any(r.get("type") == "search-query-fallback" for r in repairs):
+        try:
+            retry = await search_products("UVカット レディース 日焼け対策", ["amazon", "rakuten", "yahoo"], 3)
+            items = retry.get("results", retry.get("items", [])) if isinstance(retry, dict) else []
+            checks.append({"name": "ai-search-retry", "ok": bool(items), "count": len(items)})
+            repairs.append({"type": "ai-search-retry", "action": "retry_search", "count": len(items)})
+        except Exception as exc:
+            repairs.append({"type": "ai-search-retry-failure", "action": "escalate", "error": type(exc).__name__})
+
+    failures = [item for item in checks if item.get("ok") is False]
     report = {
         "ok": not failures,
         "agent": "patrol-ai",
         "mode": "observe-repair-report",
         "repair_policy": "allowlisted-retry-only",
+        "ai_diagnosis": diagnosis,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
         "repairs": repairs,
