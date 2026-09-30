@@ -1,4 +1,6 @@
 ---
+name: ec-research
+description: Run an evidence-based EC Pulse market research workflow
 description: Run an EC Pulse market research workflow
 ---
 
