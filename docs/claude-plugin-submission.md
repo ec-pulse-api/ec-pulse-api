@@ -52,9 +52,9 @@ Do not submit until the following are truthful and complete:
 
 The legal documents still contain `［要入力］` placeholders and therefore must not be represented as final legal policies.
 
-Production smoke testing is NOT PASS. The current audit environment cannot resolve the production hostname, and no production `EC_PULSE_API_KEY` is available to the test runner.
+Production smoke testing is NOT PASS. No production `EC_PULSE_API_KEY` is available to the test runner, so authenticated production smoke testing remains NOT RUN. Direct production HTTP verification is also NOT VERIFIED from this audit environment because external DNS resolution is unavailable.
 
-The current `main` HEAD (`87ccd097e07aadaf5c5011b4b981974db4eac3df`) has a successful GitHub Vercel deployment status. This confirms deployment completion, but it does not replace an authenticated production smoke test.
+The current `main` HEAD (`e6e4a8b8b48a1150d7b2a8cf0b1dfcd1e95feb78`) has a successful GitHub Vercel deployment status (`Deployment has completed`). This confirms deployment completion, but it does not replace an authenticated production smoke test. CI workflow runs for this docs-only commit were not yet visible in the connected GitHub workflow interface at the time of audit.
 
 ## Evaluation status
 
@@ -65,6 +65,6 @@ The current `main` HEAD (`87ccd097e07aadaf5c5011b4b981974db4eac3df`) has a succe
 - Credit shortage: NOT RUN
 - Invalid/private URL: NOT RUN against production; local literal-private validation is covered by unit tests
 - API authentication failure: NOT RUN against production
-- MCP protocol: automated test suite is present; latest plugin CI result is PASS on the previously audited plugin commit. Production MCP smoke remains NOT RUN
+- MCP protocol: automated test suite is present; latest audited plugin CI result is PASS on a previously audited plugin commit. Production MCP smoke remains NOT RUN
 
 Never mark a case PASS without an actual recorded run.
