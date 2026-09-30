@@ -456,6 +456,59 @@ def get_customer_usage(user_id: str, days: int = 30) -> dict:
     }
 
 
+def get_customer_usage_alert(user_id: str) -> dict:
+    user_id = user_id.strip()
+    if not user_id or len(user_id) > 255:
+        raise ValueError("Invalid customer user id")
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        row = conn.execute(
+            """SELECT plan, credits_balance
+               FROM api_accounts WHERE customer_user_id = %s""",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            raise RuntimeError("Customer account is not provisioned")
+        used = conn.execute(
+            """SELECT COALESCE(SUM(u.credits), 0)
+               FROM api_usage u
+               JOIN api_keys k ON k.api_key_hash = u.api_key_hash
+               JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+               WHERE a.customer_user_id = %s
+                 AND u.created_at >= date_trunc('month', CURRENT_TIMESTAMP)""",
+            (user_id,),
+        ).fetchone()[0]
+    quota_env = {
+        "free": "EC_PULSE_FREE_MONTHLY_CREDITS",
+        "pro": "EC_PULSE_PRO_MONTHLY_CREDITS",
+        "business": "EC_PULSE_BUSINESS_MONTHLY_CREDITS",
+    }[row[0]]
+    raw_quota = os.getenv(quota_env, "").strip()
+    quota = int(raw_quota) if raw_quota.isdigit() and int(raw_quota) > 0 else None
+    if quota is None:
+        return {
+            "configured": False,
+            "plan": row[0],
+            "credits_used_this_month": int(used),
+            "credits_remaining": row[1],
+            "thresholds": [{"percent": 85, "triggered": False}, {"percent": 100, "triggered": False}],
+            "message": "Monthly credit quota is not configured for this plan.",
+        }
+    percent = round((int(used) / quota) * 100, 2)
+    return {
+        "configured": True,
+        "plan": row[0],
+        "monthly_quota": quota,
+        "credits_used_this_month": int(used),
+        "credits_remaining": row[1],
+        "usage_percent": percent,
+        "thresholds": [
+            {"percent": 85, "triggered": percent >= 85},
+            {"percent": 100, "triggered": percent >= 100},
+        ],
+    }
+
+
 def create_monitor(api_key: str, url: str, interval_minutes: int, webhook_url: str) -> dict:
     now = datetime.now(timezone.utc); monitor_id = str(uuid.uuid4()); owner = _account_hash(api_key)
     with psycopg.connect(_db_url()) as conn:
