@@ -102,6 +102,6 @@ Live API smoke tests require `EC_PULSE_API_KEY`. If it is unavailable, record ex
 
 ## Marketplace submission
 
-The package follows the current Claude Code plugin structure: `.claude-plugin/plugin.json`, root `.mcp.json`, commands, skills, and evaluation documentation. The bundled MCP server uses ${CLAUDE_PLUGIN_ROOT} for portable paths.
+The package follows the current Claude Code plugin structure: `.claude-plugin/plugin.json`, the plugin-local `.mcp.json`, commands, skills, and evaluation documentation. The bundled MCP server uses ${CLAUDE_PLUGIN_ROOT} for portable paths.
 
 Before submission, provide truthful operator/support/privacy information, any requested test account or sample data, and verify ownership/control of published endpoints and documentation. This repository does not fabricate those details.
