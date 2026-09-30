@@ -52,6 +52,7 @@ jobs:
           gh issue create \
             --title "Patrol AI report: ANTHROPIC_API_KEY is not configured" \
             --body "The deterministic patrol checks ran, but the AI repair stage was skipped because the ANTHROPIC_API_KEY GitHub Actions secret is not available in this execution context. No production credentials or legal/business values were invented. Configure the repository Actions secret before expecting autonomous AI repair."
+          exit 1
 
       - name: Run Patrol AI
         if: ${{ env.ANTHROPIC_API_KEY != '' }}
