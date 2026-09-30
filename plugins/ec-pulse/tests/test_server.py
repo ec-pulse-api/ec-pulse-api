@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch\nfrom urllib.error import HTTPError
 
 SERVER = Path(__file__).resolve().parents[1] / "server.py"
 spec = importlib.util.spec_from_file_location("ec_pulse_server", SERVER)
@@ -19,6 +19,13 @@ class MCPProtocolTests(unittest.TestCase):
         r=server._handle({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
         self.assertEqual(len(r["result"]["tools"]),12)
         self.assertIn("ec_product_search",{x["name"] for x in r["result"]["tools"]})
+    def test_notification_semantics(self):
+        self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"notifications/initialized","params":{}}))
+        self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"notifications/cancelled","params":{}}))
+
+    def test_ping(self):
+        self.assertEqual(server._handle({"jsonrpc":"2.0","id":8,"method":"ping","params":{}}), {"jsonrpc":"2.0","id":8,"result":{}})
+        self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"ping","params":{}}))
     def test_unknown_method(self):
         r=server._handle({"jsonrpc":"2.0","id":3,"method":"nope","params":{}})
         self.assertEqual(r["error"]["code"],-32601)
@@ -54,6 +61,15 @@ class ValidationTests(unittest.TestCase):
                 server._validate_url(url)
     def test_compare_minimum(self):
         with self.assertRaises(ValueError): server._validate_args("ec_product_compare",{"urls":["https://example.com"]})
+    def test_uuid_validation(self):
+        for name in ("ec_monitor_history", "ec_monitor_opportunity", "ec_research_opportunity"):
+            field = "run_id" if name == "ec_research_opportunity" else "monitor_id"
+            with self.assertRaises(ValueError):
+                server._validate_args(name, {field: "not-a-uuid"})
+        valid = "12345678-1234-5678-1234-567812345678"
+        self.assertEqual(server._validate_args("ec_monitor_history", {"monitor_id": valid}), {"monitor_id": valid})
+        self.assertEqual(server._validate_args("ec_research_opportunity", {"run_id": valid}), {"run_id": valid})
+
     def test_unknown_argument(self):
         with self.assertRaises(ValueError): server._validate_args("ec_account",{"api_key":"secret"})
 
@@ -74,6 +90,14 @@ class SecurityTests(unittest.TestCase):
         with patch.object(server,"_api_request",side_effect=fail):
             server._handle({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ec_account","arguments":{}}})
         self.assertEqual(len(calls),1)
+    def test_retry_after_is_reported_without_retry(self):
+        from email.message import Message
+        headers = Message()
+        headers["Retry-After"] = "30"
+        with patch.object(server, "urlopen", side_effect=HTTPError("https://ec-pulse-api.vercel.app/v1/account", 429, "Too Many Requests", headers, None)):
+            with self.assertRaisesRegex(RuntimeError, r"429.*Retry-After: 30"):
+                server._api_request("GET", "/v1/account")
+
     def test_signature(self):
         self.assertEqual(len(server._sign("secret","1700000000","POST","/v1/products/search",b"{}")),71)
 
