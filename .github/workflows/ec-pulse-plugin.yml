@@ -8,7 +8,10 @@ on:
   pull_request:
     paths:
       - "plugins/ec-pulse/**"
+      - ".claude-plugin/**"
+      - "docs/claude-plugin-submission.md"
       - ".github/workflows/ec-pulse-plugin.yml"
+  workflow_dispatch:
 
 jobs:
   plugin-tests:
