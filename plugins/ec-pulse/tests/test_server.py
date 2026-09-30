@@ -49,7 +49,7 @@ class SecurityTests(unittest.TestCase):
         with patch.dict(os.environ,{},clear=True):
             with self.assertRaises(RuntimeError): server._api_key()
     def test_key_not_leaked(self):
-        secret="ecp_live_super_secret_test_value"
+        secret="TEST_SECRET_NOT_FOR_AUTH"
         with patch.dict(os.environ,{"EC_PULSE_API_KEY":secret},clear=True),patch.object(server,"_api_request",side_effect=RuntimeError("EC Pulse authentication failed (401)")):
             r=server._handle({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"ec_account","arguments":{}}})
         self.assertNotIn(secret,r["result"]["content"][0]["text"])
