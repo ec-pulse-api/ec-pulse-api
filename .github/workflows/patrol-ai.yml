@@ -1,0 +1,77 @@
+name: EC Pulse Patrol AI
+
+on:
+  schedule:
+    - cron: "17 0 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "plugins/ec-pulse/**"
+      - ".claude-plugin/**"
+      - ".github/workflows/**"
+      - "docs/**"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: ec-pulse-patrol
+  cancel-in-progress: false
+
+jobs:
+  patrol:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run deterministic safety checks
+        id: deterministic
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            echo "=== compileall ==="
+            python -m compileall -q plugins/ec-pulse
+            echo "=== unit tests ==="
+            python -m unittest discover -s plugins/ec-pulse/tests -v
+          } 2>&1 | tee patrol-deterministic.log
+
+      - name: Run Patrol AI
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are the EC Pulse Patrol AI for repository ${{ github.repository }}.
+
+            Mission:
+            1. Inspect the repository as a security, reliability, test, and documentation patrol.
+            2. Review the current branch/worktree and recent changes.
+            3. Run the relevant existing tests and static checks.
+            4. Look specifically for SSRF/private-network bypasses, secret leakage,
+               MCP/JSON-RPC regressions, broken plugin manifests/commands/skills,
+               stale readiness claims, missing regression tests, and broken CI triggers.
+            5. If a concrete problem is safely repairable, repair it and add/update a regression test.
+            6. Re-run relevant tests after every repair. Never claim a repair passed unless it passes.
+            7. Never invent legal/business/operator information or production credentials.
+            8. Never expose, print, copy, or commit secrets.
+            9. Never merge a pull request.
+            10. Never weaken security controls or tests to make a check pass.
+            11. The deterministic safety-check step may have failed; inspect patrol-deterministic.log and repair
+                the root cause when it is concrete and safely repairable.
+            12. Work only on a newly created patrol branch. Never push commits directly to the default branch.
+            13. Open a pull request for every code repair; do not silently leave repaired code on the default branch.
+
+            Reporting:
+            - If repaired, create a patrol branch and open a pull request against the patrolled branch.
+            - If no code change is needed, create/update one issue titled "Patrol AI report".
+            - Report checks performed, findings, repairs, tests actually passed, unresolved blockers,
+              and whether production verification was performed.
+            - If unsafe to auto-repair, report it instead of guessing.
+          claude_args: |
+            --max-turns 12
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(python:*),Bash(git:*),Bash(gh issue:*),Bash(gh pr:*),Bash(gh api:*)"
