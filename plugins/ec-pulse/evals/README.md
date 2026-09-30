@@ -11,7 +11,7 @@ Unexecuted cases must remain **NOT RUN**. Production live cases remain unexecute
 | 5. Credit shortage | NOT RUN | Requires a test account with insufficient credits |
 | 6. Invalid/private URL | NOT RUN | Must verify production API rejects unsafe destinations |
 | 7. API authentication failure | NOT RUN | Requires a deliberately invalid live key |
-| 8. MCP protocol failure | PASS | GitHub Actions plugin test suite passed on the latest audited commit |
+| 8. MCP protocol failure | PASS | GitHub Actions plugin test suite passed on the current audited commit |
 
 ## Automated test
 
@@ -23,7 +23,7 @@ It runs:
 python -m unittest discover -s plugins/ec-pulse/tests -v
 ```
 
-The latest audited commit `7196be9ac7f7086a5385704fedc2fffbd0849b62` was verified through GitHub Actions: plugin test run `36732491028` completed successfully. The repository-wide test run `36732491058` also completed successfully.
+The current audited commit `e416ac269b53a8b7e97adebdb15c6ab8f4cba665` was verified through GitHub Actions: plugin test run `36733477031` completed successfully. The repository-wide test run `36733477138` also completed successfully. The current-head Vercel GitHub status is SUCCESS.
 
 ## Live smoke test
 
