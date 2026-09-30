@@ -77,6 +77,17 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(server._validate_args("ec_monitor_history", {"monitor_id": valid}), {"monitor_id": valid})
         self.assertEqual(server._validate_args("ec_research_opportunity", {"run_id": valid}), {"run_id": valid})
 
+    def test_research_runs_url_validation(self):
+        with self.assertRaises(ValueError):
+            server._validate_args("ec_research_runs", {"url": "http://127.0.0.1/private"})
+        with self.assertRaises(ValueError):
+            server._validate_args("ec_research_runs", {"url": "https://user:pass@example.com/research"})
+        valid = "https://example.com/research"
+        self.assertEqual(
+            server._validate_args("ec_research_runs", {"url": valid, "limit": 7}),
+            {"url": valid, "limit": 7},
+        )
+
     def test_unknown_argument(self):
         with self.assertRaises(ValueError): server._validate_args("ec_account",{"api_key":"secret"})
 
