@@ -139,7 +139,13 @@ def _apply_subscription(conn, subscription, event_created: int | None = None):
             and event_created <= previous_created
         ):
             return False
-    effective_plan = plan if status in {"active", "trialing", "past_due"} else None
+    active_statuses = {"active", "trialing", "past_due"}
+    # Never silently downgrade a live Stripe subscription to the free plan when
+    # its Price ID is unknown or not configured locally. That would turn a
+    # billing configuration mistake into an unintended loss of paid state.
+    if status in active_statuses and plan is None:
+        raise RuntimeError("Stripe subscription uses an unrecognized price")
+    effective_plan = plan if status in active_statuses else None
     if effective_plan:
         conn.execute("""UPDATE api_accounts SET plan=%s, stripe_subscription_id=%s, subscription_status=%s,
             current_period_start=%s, current_period_end=%s, cancel_at_period_end=%s, stripe_subscription_created_at=%s, last_stripe_event_created=%s, last_stripe_event_id=%s, updated_at=%s WHERE api_key_hash=%s""", (effective_plan, subscription_id, status, _ts(subscription.get("current_period_start")), _ts(subscription.get("current_period_end")), bool(subscription.get("cancel_at_period_end", False)), subscription.get("created"), event_created, event_id, datetime.now(timezone.utc), row[0]))
