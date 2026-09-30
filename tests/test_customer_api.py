@@ -62,3 +62,42 @@ def test_customer_key_rotation_is_forwarded(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["api_key"] == "ecp_live_rotated"
+
+
+def test_billing_success_does_not_expose_checkout_session_id(monkeypatch):
+    from datetime import datetime, timezone
+    from fastapi.testclient import TestClient
+
+    async def fake_current_user(request):
+        return {"id": "user-789"}
+
+    class Cursor:
+        def fetchone(self):
+            return (
+                "pro", 500, "active", "cus_123", "sub_123",
+                datetime(2026, 1, 1, tzinfo=timezone.utc),
+                datetime(2026, 2, 1, tzinfo=timezone.utc),
+                False,
+            )
+
+    class Conn:
+        def execute(self, sql, params=()):
+            return Cursor()
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(main, "current_user", fake_current_user)
+    monkeypatch.setattr(main.psycopg, "connect", lambda *args, **kwargs: Conn())
+    monkeypatch.setattr(main, "_db_url", lambda: "postgresql://test/test")
+
+    response = TestClient(main.app).get(
+        "/billing/success?session_id=cs_sensitive",
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "active"
+    assert "checkout_session_id" not in body
+    assert "cs_sensitive" not in response.text
