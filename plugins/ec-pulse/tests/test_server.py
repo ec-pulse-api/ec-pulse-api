@@ -95,7 +95,9 @@ class SecurityTests(unittest.TestCase):
         from email.message import Message
         headers = Message()
         headers["Retry-After"] = "30"
-        with patch.object(server, "urlopen", side_effect=HTTPError("https://ec-pulse-api.vercel.app/v1/account", 429, "Too Many Requests", headers, None)):
+        with patch.dict(os.environ, {"EC_PULSE_API_KEY": "TEST_SECRET_NOT_FOR_AUTH"}, clear=True), patch.object(
+            server, "urlopen", side_effect=HTTPError("https://ec-pulse-api.vercel.app/v1/account", 429, "Too Many Requests", headers, None)
+        ):
             with self.assertRaisesRegex(RuntimeError, r"429.*Retry-After: 30"):
                 server._api_request("GET", "/v1/account")
 
