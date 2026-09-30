@@ -10,6 +10,8 @@ allowed-tools:
   - mcp__plugin_ec-pulse_ec-pulse__ec_consumer_insights
 ---
 
+User request/context: $ARGUMENTS
+
 Run an evidence-based EC Pulse research workflow.
 
 1. Search products first when discovery is needed.
