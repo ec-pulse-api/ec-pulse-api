@@ -9,6 +9,8 @@ allowed-tools:
   - mcp__plugin_ec-pulse_ec-pulse__ec_monitor_create
 ---
 
+User request/context: $ARGUMENTS
+
 Inspect the authenticated EC Pulse price monitors.
 
 - Use monitor list for discovery.
