@@ -1,0 +1,22 @@
+name: EC Pulse Claude Plugin Tests
+
+on:
+  push:
+    paths:
+      - "plugins/ec-pulse/**"
+      - ".github/workflows/ec-pulse-plugin.yml"
+  pull_request:
+    paths:
+      - "plugins/ec-pulse/**"
+      - ".github/workflows/ec-pulse-plugin.yml"
+
+jobs:
+  plugin-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run MCP protocol and security tests
+        run: python -m unittest discover -s plugins/ec-pulse/tests -v
