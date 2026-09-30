@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "17 0 * * *"
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "plugins/ec-pulse/**"
+      - ".claude-plugin/**"
+      - ".github/workflows/**"
+      - "docs/**"
 
 permissions:
   contents: write
