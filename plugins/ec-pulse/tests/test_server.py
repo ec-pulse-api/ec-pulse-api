@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import socket
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -68,6 +69,13 @@ class ValidationTests(unittest.TestCase):
                 server._validate_url(url)
     def test_compare_minimum(self):
         with self.assertRaises(ValueError): server._validate_args("ec_product_compare",{"urls":["https://example.com"]})
+    def test_dns_resolved_private_url_rejected(self):
+        with patch.object(server.socket, "getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
+        ]):
+            with self.assertRaises(ValueError):
+                server._validate_url("https://public.example/path")
+
     def test_uuid_validation(self):
         for name in ("ec_monitor_history", "ec_monitor_opportunity", "ec_research_opportunity"):
             field = "run_id" if name == "ec_research_opportunity" else "monitor_id"
