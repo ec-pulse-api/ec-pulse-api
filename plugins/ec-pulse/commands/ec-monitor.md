@@ -1,4 +1,6 @@
 ---
+name: ec-monitor
+description: Inspect EC Pulse price monitors and opportunity signals
 description: Inspect EC Pulse price monitors and price opportunity signals
 ---
 
