@@ -3,7 +3,8 @@ import json
 import os
 from pathlib import Path
 import unittest
-from unittest.mock import patch\nfrom urllib.error import HTTPError
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 SERVER = Path(__file__).resolve().parents[1] / "server.py"
 spec = importlib.util.spec_from_file_location("ec_pulse_server", SERVER)
