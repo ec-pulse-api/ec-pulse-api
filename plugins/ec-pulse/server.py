@@ -1,251 +1,256 @@
 #!/usr/bin/env python3
-"""Minimal stdio MCP bridge for the EC Pulse REST API.
+"""Local stdio MCP adapter for EC Pulse.
 
-No third-party Python package is required. Claude Code launches this process
-through the plugin's .mcp.json configuration.
+Secrets are read from environment variables and are never printed by this process.
+The adapter performs one upstream request per tool call and never retries automatically.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
+import time
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode, urlparse
+from urllib.request import Request, urlopen
 
-BASE_URL = os.getenv("EC_PULSE_API_BASE_URL", "https://ec-pulse-api.vercel.app").rstrip("/")
-API_KEY = os.getenv("EC_PULSE_API_KEY", "")
+DEFAULT_BASE_URL = "https://ec-pulse-api.vercel.app"
+TIMEOUT_SECONDS = 20
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+
+def _tool(name: str, description: str, properties: dict[str, Any], required: list[str] | None = None, *, read_only: bool = True, destructive: bool = False) -> dict[str, Any]:
+    return {
+        "name": name,
+        "description": description,
+        "inputSchema": {"type": "object", "properties": properties, "required": required or []},
+        "annotations": {"readOnlyHint": read_only, "destructiveHint": destructive, "title": name},
+    }
 
 TOOLS = [
-    {
-        "name": "ec_product_search",
-        "description": "Search Japanese marketplace products across Amazon, Rakuten, and Yahoo.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "marketplaces": {"type": "array", "items": {"type": "string"}, "default": ["amazon", "rakuten", "yahoo"]},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5}
-            },
-            "required": ["query"]
-        }
-    },
-    {
-        "name": "ec_product_get",
-        "description": "Fetch normalized product data from a public product URL.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"url": {"type": "string", "format": "uri"}},
-            "required": ["url"]
-        }
-    },
-    {
-        "name": "ec_product_compare",
-        "description": "Compare 2 to 20 public product URLs and return normalized price ranking.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "urls": {"type": "array", "minItems": 2, "maxItems": 20, "items": {"type": "string", "format": "uri"}}
-            },
-            "required": ["urls"]
-        }
-    },
-    {
-        "name": "ec_research_ingest",
-        "description": "Ingest public URLs for market research, comment analysis, pain points, and trend signals.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "urls": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "format": "uri"}},
-                "max_comments_per_url": {"type": "integer", "minimum": 1, "maximum": 500, "default": 500}
-            },
-            "required": ["urls"]
-        }
-    },
-    {
-        "name": "ec_consumer_insights",
-        "description": "Analyze customer comments for pain points, terms, and recommended product angles.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "comments": {"type": "array", "minItems": 1, "maxItems": 5000, "items": {"type": "string"}},
-                "source": {"type": "string"}
-            },
-            "required": ["comments"]
-        }
-    },
-    {
-        "name": "ec_monitor_create",
-        "description": "Create a price monitor with a webhook destination.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "format": "uri"},
-                "interval_minutes": {"type": "integer", "minimum": 5, "maximum": 10080, "default": 60},
-                "webhook_url": {"type": "string", "format": "uri"}
-            },
-            "required": ["url", "webhook_url"]
-        }
-    },
-    {
-        "name": "ec_monitor_list",
-        "description": "List the authenticated customer's price monitors.",
-        "inputSchema": {"type": "object", "properties": {}}
-    },
-    {
-        "name": "ec_monitor_history",
-        "description": "Read price history for one owned monitor.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "monitor_id": {"type": "string"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
-            },
-            "required": ["monitor_id"]
-        }
-    },
-    {
-        "name": "ec_monitor_opportunity",
-        "description": "Analyze a monitor's price history for opportunity signals.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "monitor_id": {"type": "string"},
-                "limit": {"type": "integer", "minimum": 2, "maximum": 1000, "default": 100}
-            },
-            "required": ["monitor_id"]
-        }
-    },
-    {
-        "name": "ec_account",
-        "description": "Return the authenticated EC Pulse API account plan and current usage.",
-        "inputSchema": {"type": "object", "properties": {}}
-    }
+    _tool("ec_product_search", "Search EC Pulse product data across Amazon, Rakuten, and Yahoo Japan.", {
+        "query": {"type": "string", "minLength": 1, "maxLength": 200},
+        "marketplaces": {"type": "array", "items": {"type": "string", "enum": ["amazon", "rakuten", "yahoo"]}, "minItems": 1, "maxItems": 3},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+    }, ["query"]),
+    _tool("ec_product_get", "Retrieve normalized product data for one public product URL through EC Pulse.", {
+        "url": {"type": "string", "format": "uri", "minLength": 1}
+    }, ["url"]),
+    _tool("ec_product_compare", "Compare normalized product data and observed prices for 2 to 20 public product URLs.", {
+        "urls": {"type": "array", "items": {"type": "string", "format": "uri"}, "minItems": 2, "maxItems": 20}
+    }, ["urls"]),
+    _tool("ec_research_ingest", "Collect publicly accessible comments from supported URLs and return EC Pulse research analysis.", {
+        "urls": {"type": "array", "items": {"type": "string", "format": "uri"}, "minItems": 1, "maxItems": 20},
+        "max_comments_per_url": {"type": "integer", "minimum": 1, "maximum": 500}
+    }, ["urls"]),
+    _tool("ec_consumer_insights", "Analyze supplied customer comments with EC Pulse's rule-based pain-point and term extraction.", {
+        "comments": {"type": "array", "items": {"type": "string", "maxLength": 2000}, "minItems": 1, "maxItems": 5000},
+        "source": {"type": "string", "maxLength": 50}
+    }, ["comments"]),
+    _tool("ec_monitor_create", "Create a price monitor. This changes persistent account state and requires explicit user intent.", {
+        "url": {"type": "string", "format": "uri"},
+        "interval_minutes": {"type": "integer", "minimum": 5, "maximum": 10080},
+        "webhook_url": {"type": "string", "format": "uri"}
+    }, ["url", "webhook_url"], read_only=False, destructive=True),
+    _tool("ec_monitor_list", "List price monitors owned by the authenticated EC Pulse account.", {}),
+    _tool("ec_monitor_history", "Read price history for one monitor owned by the authenticated EC Pulse account.", {
+        "monitor_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 1000}
+    }, ["monitor_id"]),
+    _tool("ec_monitor_opportunity", "Analyze price movement for one owned monitor and return the EC Pulse opportunity signal.", {
+        "monitor_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "limit": {"type": "integer", "minimum": 2, "maximum": 1000}
+    }, ["monitor_id"]),
+    _tool("ec_account", "Return the authenticated account plan, remaining credits, and usage summary. The raw API key is never returned.", {}),
 ]
 
+TOOL_MAP = {t["name"]: t for t in TOOLS}
 
-def send(message: dict) -> None:
-    sys.stdout.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
-    sys.stdout.flush()
-
-
-def api_request(method: str, path: str, payload: dict | None = None, query: dict | None = None) -> dict:
-    if not API_KEY:
+def _api_key() -> str:
+    value = os.getenv("EC_PULSE_API_KEY", "").strip()
+    if not value:
         raise RuntimeError("EC_PULSE_API_KEY is not configured")
-    url = BASE_URL + path
-    if query:
-        url += "?" + urllib.parse.urlencode(query, doseq=True)
-    body = None
-    headers = {"Accept": "application/json", "X-API-Key": API_KEY}
-    if payload is not None:
-        body = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            detail = json.loads(raw)
-        except json.JSONDecodeError:
-            detail = raw
-        raise RuntimeError(f"EC Pulse API HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"EC Pulse API connection failed: {exc.reason}") from exc
+    return value
 
+def _base_url() -> str:
+    value = os.getenv("EC_PULSE_API_BASE_URL", DEFAULT_BASE_URL).strip().rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("EC_PULSE_API_BASE_URL must be a valid http(s) URL")
+    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise RuntimeError("Non-local EC_PULSE_API_BASE_URL must use HTTPS")
+    return value
 
-def call_tool(name: str, args: dict) -> dict:
+def _validate_url(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("URL must be a non-empty string")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("URL must be an absolute http(s) URL")
+    if parsed.username or parsed.password:
+        raise ValueError("URL credentials are not allowed")
+    return value
+
+def _validate_args(name: str, args: Any) -> dict[str, Any]:
+    if not isinstance(args, dict):
+        raise ValueError("Tool arguments must be a JSON object")
+    allowed = set(TOOL_MAP[name]["inputSchema"]["properties"])
+    unknown = set(args) - allowed
+    if unknown:
+        raise ValueError("Unknown argument(s): " + ", ".join(sorted(unknown)))
     if name == "ec_product_search":
-        return api_request("POST", "/v1/products/search", {
-            "query": args["query"],
-            "marketplaces": args.get("marketplaces", ["amazon", "rakuten", "yahoo"]),
-            "limit": args.get("limit", 5),
-        })
+        q = args.get("query")
+        if not isinstance(q, str) or not 1 <= len(q.strip()) <= 200:
+            raise ValueError("query must contain 1-200 characters")
+        markets = args.get("marketplaces", ["amazon", "rakuten", "yahoo"])
+        if not isinstance(markets, list) or not 1 <= len(markets) <= 3 or len(set(markets)) != len(markets) or any(x not in {"amazon", "rakuten", "yahoo"} for x in markets):
+            raise ValueError("marketplaces must contain 1-3 unique values from amazon, rakuten, yahoo")
+        limit = args.get("limit", 5)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
+            raise ValueError("limit must be between 1 and 10")
+    elif name == "ec_product_get":
+        _validate_url(args.get("url"))
+    elif name in {"ec_product_compare", "ec_research_ingest"}:
+        urls = args.get("urls")
+        minimum = 2 if name == "ec_product_compare" else 1
+        if not isinstance(urls, list) or not minimum <= len(urls) <= 20:
+            raise ValueError(f"urls must contain {minimum}-20 items")
+        for item in urls:
+            _validate_url(item)
+        if name == "ec_research_ingest":
+            value = args.get("max_comments_per_url", 500)
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 500:
+                raise ValueError("max_comments_per_url must be between 1 and 500")
+    elif name == "ec_consumer_insights":
+        comments = args.get("comments")
+        if not isinstance(comments, list) or not 1 <= len(comments) <= 5000 or any(not isinstance(x, str) or len(x) > 2000 for x in comments):
+            raise ValueError("comments must contain 1-5000 strings, each at most 2000 characters")
+        source = args.get("source")
+        if source is not None and (not isinstance(source, str) or len(source) > 50):
+            raise ValueError("source must be at most 50 characters")
+    elif name == "ec_monitor_create":
+        _validate_url(args.get("url"))
+        _validate_url(args.get("webhook_url"))
+        interval = args.get("interval_minutes", 60)
+        if isinstance(interval, bool) or not isinstance(interval, int) or not 5 <= interval <= 10080:
+            raise ValueError("interval_minutes must be between 5 and 10080")
+    elif name in {"ec_monitor_history", "ec_monitor_opportunity"}:
+        monitor_id = args.get("monitor_id")
+        if not isinstance(monitor_id, str) or not 1 <= len(monitor_id) <= 200:
+            raise ValueError("monitor_id must be 1-200 characters")
+        if "limit" in args:
+            limit = args["limit"]
+            minimum = 2 if name == "ec_monitor_opportunity" else 1
+            if isinstance(limit, bool) or not isinstance(limit, int) or not minimum <= limit <= 1000:
+                raise ValueError(f"limit must be between {minimum} and 1000")
+    return args
+
+def _sign(key: str, timestamp: str, method: str, path: str, body: bytes) -> str:
+    digest = hashlib.sha256(body).hexdigest()
+    payload = f"{timestamp}.{method.upper()}.{path}.{digest}".encode()
+    return "sha256=" + hmac.new(key.encode(), payload, hashlib.sha256).hexdigest()
+
+def _api_request(method: str, path: str, *, body: dict[str, Any] | None = None, query: dict[str, Any] | None = None) -> Any:
+    key = _api_key()
+    url = _base_url() + path
+    if query:
+        url += "?" + urlencode({k: v for k, v in query.items() if v is not None}, doseq=True)
+    payload = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode() if body is not None else b""
+    headers = {"Accept": "application/json", "User-Agent": "EC-Pulse-Claude-Plugin/0.1.0", "X-API-Key": key}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    if os.getenv("EC_PULSE_REQUIRE_REQUEST_SIGNATURE", "").lower() in {"1", "true", "yes"}:
+        timestamp = str(int(time.time()))
+        headers["X-EC-Timestamp"] = timestamp
+        headers["X-EC-Signature"] = _sign(key, timestamp, method, path, payload)
+    req = Request(url, data=payload if method != "GET" else None, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=TIMEOUT_SECONDS) as response:
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise RuntimeError("EC Pulse response exceeded the plugin response limit")
+        return json.loads(raw.decode("utf-8")) if raw else {}
+    except HTTPError as exc:
+        if exc.code == 401:
+            raise RuntimeError("EC Pulse authentication failed (401)") from exc
+        if exc.code == 402:
+            raise RuntimeError("EC Pulse credits are insufficient (402)") from exc
+        if exc.code == 403:
+            raise RuntimeError("EC Pulse authorization failed (403)") from exc
+        if exc.code == 404:
+            raise RuntimeError("EC Pulse resource was not found (404)") from exc
+        if exc.code == 429:
+            raise RuntimeError("EC Pulse rate limit exceeded (429)") from exc
+        if 400 <= exc.code < 500:
+            raise RuntimeError(f"EC Pulse request was rejected ({exc.code})") from exc
+        raise RuntimeError(f"EC Pulse upstream service error ({exc.code})") from exc
+    except HTTPError:
+        raise
+    except URLError as exc:
+        raise RuntimeError(f"EC Pulse connection failed ({type(exc.reason).__name__})") from exc
+    except TimeoutError as exc:
+        raise RuntimeError("EC Pulse request timed out") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("EC Pulse returned invalid JSON") from exc
+
+def _call_tool(name: str, args: Any) -> Any:
+    args = _validate_args(name, args)
+    if name == "ec_product_search":
+        return _api_request("POST", "/v1/products/search", body={"query": args["query"].strip(), "marketplaces": args.get("marketplaces", ["amazon", "rakuten", "yahoo"]), "limit": args.get("limit", 5)})
     if name == "ec_product_get":
-        return api_request("GET", "/v1/products", query={"url": args["url"]})
+        return _api_request("GET", "/v1/products", query={"url": args["url"]})
     if name == "ec_product_compare":
-        return api_request("POST", "/v1/products/compare", {"urls": args["urls"]})
+        return _api_request("POST", "/v1/products/compare", body={"urls": args["urls"]})
     if name == "ec_research_ingest":
-        return api_request("POST", "/v1/research/ingest", {
-            "urls": args["urls"],
-            "max_comments_per_url": args.get("max_comments_per_url", 500),
-        })
+        return _api_request("POST", "/v1/research/ingest", body={"urls": args["urls"], "max_comments_per_url": args.get("max_comments_per_url", 500)})
     if name == "ec_consumer_insights":
-        payload = {"comments": args["comments"]}
-        if args.get("source"):
-            payload["source"] = args["source"]
-        return api_request("POST", "/v1/consumer-insights/analyze", payload)
+        return _api_request("POST", "/v1/consumer-insights/analyze", body={"comments": args["comments"], "source": args.get("source")})
     if name == "ec_monitor_create":
-        return api_request("POST", "/v1/monitors", {
-            "url": args["url"],
-            "interval_minutes": args.get("interval_minutes", 60),
-            "webhook_url": args["webhook_url"],
-        })
+        return _api_request("POST", "/v1/monitors", body={"url": args["url"], "interval_minutes": args.get("interval_minutes", 60), "webhook_url": args["webhook_url"]})
     if name == "ec_monitor_list":
-        return api_request("GET", "/v1/monitors")
+        return _api_request("GET", "/v1/monitors")
     if name == "ec_monitor_history":
-        return api_request("GET", f"/v1/monitors/{urllib.parse.quote(args['monitor_id'], safe='')}/history", query={"limit": args.get("limit", 100)})
+        return _api_request("GET", f"/v1/monitors/{quote(args['monitor_id'], safe='')}/history", query={"limit": args.get("limit", 100)})
     if name == "ec_monitor_opportunity":
-        return api_request("GET", f"/v1/monitors/{urllib.parse.quote(args['monitor_id'], safe='')}/opportunity", query={"limit": args.get("limit", 100)})
+        return _api_request("GET", f"/v1/monitors/{quote(args['monitor_id'], safe='')}/opportunity", query={"limit": args.get("limit", 100)})
     if name == "ec_account":
-        return api_request("GET", "/v1/account")
-    raise ValueError(f"Unknown tool: {name}")
+        return _api_request("GET", "/v1/account")
+    raise ValueError("Unknown tool")
 
+def _tool_error(message: str) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": message}], "isError": True}
 
-def handle(message: dict) -> dict | None:
-    request_id = message.get("id")
+def _handle(message: Any) -> dict[str, Any] | None:
+    if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}
     method = message.get("method")
-    params = message.get("params") or {}
-
+    request_id = message.get("id")
     if method == "notifications/initialized":
         return None
-
     if method == "initialize":
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "protocolVersion": params.get("protocolVersion", "2025-06-18"),
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "ec-pulse", "version": "0.1.0"},
-            },
-        }
-
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "ec-pulse", "version": "0.1.0"}}}
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}}
-
     if method == "tools/call":
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "params must be an object"}}
         name = params.get("name")
-        args = params.get("arguments") or {}
+        if name not in TOOL_MAP:
+            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Unknown tool"}}
         try:
-            result = call_tool(name, args)
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}],
-                    "isError": False,
-                },
-            }
+            value = _call_tool(name, params.get("arguments") or {})
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False, separators=(",", ":"))}], "isError": False}}
+        except (ValueError, RuntimeError) as exc:
+            return {"jsonrpc": "2.0", "id": request_id, "result": _tool_error(str(exc))}
         except Exception as exc:
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "content": [{"type": "text", "text": str(exc)}],
-                    "isError": True,
-                },
-            }
-
-    return {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "error": {"code": -32601, "message": f"Method not found: {method}"},
-    }
-
+            return {"jsonrpc": "2.0", "id": request_id, "result": _tool_error(f"Unexpected plugin error: {type(exc).__name__}")}
+    if method is None:
+        return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": "Invalid Request"}}
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}}
 
 def main() -> None:
     for line in sys.stdin:
@@ -253,12 +258,14 @@ def main() -> None:
             continue
         try:
             message = json.loads(line)
-            response = handle(message)
-            if response is not None:
-                send(response)
-        except Exception as exc:
-            send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(exc)}})
-
+            response = _handle(message)
+        except json.JSONDecodeError:
+            response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+        except Exception:
+            response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": "Internal plugin error"}}
+        if response is not None:
+            sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
+            sys.stdout.flush()
 
 if __name__ == "__main__":
     main()
