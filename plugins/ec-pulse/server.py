@@ -59,11 +59,11 @@ TOOLS = [
     }, ["url", "webhook_url"], read_only=False, destructive=False),
     _tool("ec_monitor_list", "List price monitors owned by the authenticated EC Pulse account.", {}),
     _tool("ec_monitor_history", "Read price history for one monitor owned by the authenticated EC Pulse account.", {
-        "monitor_id": {"type": "string", "format": "uuid", "maxLength": 200}
+        "monitor_id": {"type": "string", "format": "uuid", "maxLength": 200},
         "limit": {"type": "integer", "minimum": 1, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_monitor_opportunity", "Analyze price movement for one owned monitor and return the EC Pulse opportunity signal.", {
-        "monitor_id": {"type": "string", "format": "uuid"},
+        "monitor_id": {"type": "string", "format": "uuid", "maxLength": 200},
         "limit": {"type": "integer", "minimum": 2, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_account", "Return the authenticated account plan, remaining credits, and usage summary. The raw API key is never returned.", {}),
