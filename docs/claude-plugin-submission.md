@@ -52,9 +52,9 @@ Do not submit until the following are truthful and complete:
 
 The legal documents still contain `［要入力］` placeholders and therefore must not be represented as final legal policies.
 
-Production smoke testing is also not marked PASS. The audit environment cannot resolve external DNS, and no production `EC_PULSE_API_KEY` is available to the test runner.
+Production smoke testing is also not marked PASS because no production `EC_PULSE_API_KEY` is available to the test runner. Unauthenticated production reachability has been verified separately (`/` 200, `/health` 200 with database `ok`, `/v1/account` 401 without a key).
 
-The existing repository's Vercel status currently reports `build-rate-limit`. This is separate from the Plugin source changes and must be resolved before claiming the Production deployment is healthy.
+The latest PR branch Vercel deployment is READY. An earlier PR check reported `build-rate-limit`; that historical check is not treated as a current production-health failure.
 
 ## Evaluation status
 
