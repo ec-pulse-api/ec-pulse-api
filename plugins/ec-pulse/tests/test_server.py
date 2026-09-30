@@ -39,6 +39,19 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError): server._validate_args("ec_product_search",{"query":""})
     def test_invalid_url(self):
         with self.assertRaises(ValueError): server._validate_url("not-a-url")
+    def test_local_and_private_urls_rejected(self):
+        for url in [
+            "http://localhost:8080/x",
+            "http://127.0.0.1:8080/x",
+            "http://10.0.0.1/x",
+            "http://172.16.0.1/x",
+            "http://192.168.1.1/x",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]/x",
+            "http://[fc00::1]/x",
+        ]:
+            with self.assertRaises(ValueError, msg=url):
+                server._validate_url(url)
     def test_compare_minimum(self):
         with self.assertRaises(ValueError): server._validate_args("ec_product_compare",{"urls":["https://example.com"]})
     def test_unknown_argument(self):
