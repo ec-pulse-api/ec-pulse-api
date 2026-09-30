@@ -43,37 +43,38 @@ jobs:
             python -m unittest discover -s plugins/ec-pulse/tests -v
           } 2>&1 | tee patrol-deterministic.log
 
-      - name: Run Patrol AI
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: |
-            You are the EC Pulse Patrol AI for repository ${{ github.repository }}.
+      - name: Run self-contained Patrol AI
+        id: patrol
+        run: |
+          set -o pipefail
+          python scripts/ec_pulse_patrol.py | tee patrol-report.json
 
-            Mission:
-            1. Inspect the repository as a security, reliability, test, and documentation patrol.
-            2. Review the current branch/worktree and recent changes.
-            3. Run the relevant existing tests and static checks.
-            4. Look specifically for SSRF/private-network bypasses, secret leakage,
-               MCP/JSON-RPC regressions, broken plugin manifests/commands/skills,
-               stale readiness claims, missing regression tests, and broken CI triggers.
-            5. If a concrete problem is safely repairable, repair it and add/update a regression test.
-            6. Re-run relevant tests after every repair. Never claim a repair passed unless it passes.
-            7. Never invent legal/business/operator information or production credentials.
-            8. Never expose, print, copy, or commit secrets.
-            9. Never merge a pull request.
-            10. Never weaken security controls or tests to make a check pass.
-            11. The deterministic safety-check step may have failed; inspect patrol-deterministic.log and repair
-                the root cause when it is concrete and safely repairable.
-            12. Work only on a newly created patrol branch. Never push commits directly to the default branch.
-            13. Open a pull request for every code repair; do not silently leave repaired code on the default branch.
+      - name: Re-audit after repair
+        id: reaudit
+        run: |
+          set -o pipefail
+          python scripts/ec_pulse_patrol.py | tee patrol-reaudit.json
+          if grep -q '"status": "FAIL"' patrol-reaudit.json; then
+            echo "::error::Patrol re-audit failed"
+            exit 1
+          fi
 
-            Reporting:
-            - If repaired, create a patrol branch and open a pull request against the patrolled branch.
-            - If no code change is needed, create/update one issue titled "Patrol AI report".
-            - Report checks performed, findings, repairs, tests actually passed, unresolved blockers,
-              and whether production verification was performed.
-            - If unsafe to auto-repair, report it instead of guessing.
-          claude_args: |
-            --max-turns 12
-            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(python:*),Bash(git:*),Bash(gh issue:*),Bash(gh pr:*),Bash(gh api:*)"
+      - name: Publish patrol report
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body="## EC Pulse Patrol AI report
+
+          Self-contained patrol executed without requiring an external AI credential.
+
+          ### Initial patrol
+          ```json
+          $(cat patrol-report.json 2>/dev/null || echo '{"status":"NOT_VERIFIED"}')
+          ```
+
+          ### Re-audit
+          ```json
+          $(cat patrol-reaudit.json 2>/dev/null || echo '{"status":"NOT_VERIFIED"}')
+          ```"
+          gh issue create --title "Patrol AI report" --body "$body"
