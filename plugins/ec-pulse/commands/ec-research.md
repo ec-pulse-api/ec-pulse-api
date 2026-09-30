@@ -8,6 +8,8 @@ allowed-tools:
   - mcp__plugin_ec-pulse_ec-pulse__ec_product_compare
   - mcp__plugin_ec-pulse_ec-pulse__ec_research_ingest
   - mcp__plugin_ec-pulse_ec-pulse__ec_consumer_insights
+  - mcp__plugin_ec-pulse_ec-pulse__ec_research_runs
+  - mcp__plugin_ec-pulse_ec-pulse__ec_research_opportunity
 ---
 
 Run an evidence-based EC Pulse research workflow.
