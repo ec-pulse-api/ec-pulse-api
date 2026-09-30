@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS api_accounts (
     plan TEXT NOT NULL DEFAULT 'free',
     credits_balance INTEGER NOT NULL DEFAULT 100,
     created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
+    updated_at TIMESTAMPTZ NOT NULL,
+    customer_user_id TEXT
 );
 CREATE TABLE IF NOT EXISTS api_keys (
     api_key_hash TEXT PRIMARY KEY,
@@ -148,6 +149,8 @@ def _init(conn):
         conn.execute(SCHEMA)
         # Safe migration for the existing monitor table.
         conn.execute("ALTER TABLE monitors ADD COLUMN IF NOT EXISTS owner_key_hash TEXT")
+        conn.execute("ALTER TABLE api_accounts ADD COLUMN IF NOT EXISTS customer_user_id TEXT")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_accounts_customer_user ON api_accounts (customer_user_id) WHERE customer_user_id IS NOT NULL")
         master_key = os.getenv("EC_PULSE_API_KEY")
         if master_key:
             key_hash = _account_hash(master_key)
@@ -196,6 +199,45 @@ def create_api_key(plan: str = "free", credits: int = 100) -> dict:
         conn.execute("INSERT INTO api_keys (api_key_hash, key_prefix, account_key_hash, active, created_at) VALUES (%s, %s, %s, TRUE, %s)", (key_hash, raw_key[:12], key_hash, now))
         conn.commit()
     return {"api_key": raw_key, "key_prefix": raw_key[:12], "plan": plan, "credits_balance": credits, "created_at": now.isoformat(), "warning": "Store this API key securely. It will not be shown again."}
+
+def provision_customer_api_key(user_id: str, rotate: bool = False) -> dict:
+    """Provision or rotate an API key for an authenticated customer account."""
+    user_id = user_id.strip()
+    if not user_id or len(user_id) > 255:
+        raise ValueError("Invalid customer user id")
+    raw_key = f"ecp_live_{secrets.token_urlsafe(32)}"
+    key_hash = _account_hash(raw_key)
+    now = datetime.now(timezone.utc)
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        row = conn.execute(
+            "SELECT api_key_hash, plan, credits_balance FROM api_accounts WHERE customer_user_id = %s FOR UPDATE",
+            (user_id,),
+        ).fetchone()
+        if row:
+            account_hash, plan, balance = row
+            if not rotate:
+                existing = conn.execute(
+                    "SELECT key_prefix FROM api_keys WHERE account_key_hash = %s AND active = TRUE ORDER BY created_at DESC LIMIT 1",
+                    (account_hash,),
+                ).fetchone()
+                if existing:
+                    return {"created": False, "key_prefix": existing[0], "plan": plan, "credits_balance": balance, "warning": "The existing API key is not returned again. Rotate to issue a new key."}
+            conn.execute("UPDATE api_keys SET active = FALSE WHERE account_key_hash = %s AND active = TRUE", (account_hash,))
+        else:
+            account_hash = key_hash
+            plan = "free"
+            balance = 100
+            conn.execute(
+                "INSERT INTO api_accounts (api_key_hash, plan, credits_balance, created_at, updated_at, customer_user_id) VALUES (%s, 'free', 100, %s, %s, %s)",
+                (account_hash, now, now, user_id),
+            )
+        conn.execute(
+            "INSERT INTO api_keys (api_key_hash, key_prefix, account_key_hash, active, created_at) VALUES (%s, %s, %s, TRUE, %s)",
+            (key_hash, raw_key[:12], account_hash, now),
+        )
+        conn.commit()
+    return {"created": True, "api_key": raw_key, "key_prefix": raw_key[:12], "plan": plan, "credits_balance": balance, "warning": "Store this API key securely. It will not be shown again."}
 
 def list_api_keys() -> list[dict]:
     with psycopg.connect(_db_url()) as conn:
