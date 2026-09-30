@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "ec-pulse-api",
+  "version": "1.0.0",
+  "description": "EC Pulse Claude Code plugin for Japanese e-commerce product discovery, research, consumer insights, and price monitoring.",
+  "owner": {
+    "name": "EC Pulse API"
+  },
+  "plugins": [
+    {
+      "name": "ec-pulse",
+      "description": "EC Pulse tools for Japanese e-commerce product data, price monitoring, research, consumer insights, and opportunity discovery.",
+      "version": "0.1.0",
+      "author": {
+        "name": "EC Pulse API"
+      },
+      "source": "./plugins/ec-pulse",
+      "category": "productivity"
+    }
+  ]
+}
