@@ -17,7 +17,7 @@ class MCPProtocolTests(unittest.TestCase):
         self.assertEqual(r["result"]["serverInfo"]["name"],"ec-pulse")
     def test_tools_list(self):
         r=server._handle({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
-        self.assertEqual(len(r["result"]["tools"]),10)
+        self.assertEqual(len(r["result"]["tools"]),12)
         self.assertIn("ec_product_search",{x["name"] for x in r["result"]["tools"]})
     def test_unknown_method(self):
         r=server._handle({"jsonrpc":"2.0","id":3,"method":"nope","params":{}})
