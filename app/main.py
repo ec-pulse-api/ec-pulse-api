@@ -11,7 +11,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, constr, HttpUrl
 
 from app.services.billing import cancel_subscription, create_checkout, create_customer_portal, process_webhook
-from app.services.monitor_store import consume_credit, create_monitor, create_monitor_with_credit, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity, list_research_runs, provision_customer_api_key, list_customer_api_keys, revoke_customer_api_key, get_customer_usage
+from app.services.monitor_store import consume_credit, create_monitor, create_monitor_with_credit, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity, list_research_runs, provision_customer_api_key, list_customer_api_keys, revoke_customer_api_key, get_customer_usage, get_customer_usage_alert
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
@@ -295,6 +295,20 @@ async def customer_usage(http_request: Request, days: int = Query(default=30, ge
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
     try:
         return get_customer_usage(user_id, days=days)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/v1/customer/usage/alerts", tags=["customer"])
+async def customer_usage_alerts(http_request: Request):
+    user = await current_user(http_request)
+    user_id = user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    try:
+        return get_customer_usage_alert(user_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
