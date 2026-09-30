@@ -65,6 +65,8 @@ The latest PR branch Vercel deployment is READY. An earlier PR check reported `b
 - Credit shortage: NOT RUN
 - Invalid/private URL: NOT RUN against production; local literal-private validation is covered by unit tests
 - API authentication failure: NOT RUN against production
-- MCP protocol: GitHub Actions plugin test suite PASS on PR #5 head
+- MCP protocol/security: GitHub Actions plugin test suite PASS on latest audited commit `7196be9ac7f7086a5385704fedc2fffbd0849b62` (run `36732491028`)
+- Repository-wide tests: PASS on latest audited commit (run `36732491058`)
+- Vercel commit status: SUCCESS on latest audited commit
 
 Never mark a case PASS without an actual recorded run.
