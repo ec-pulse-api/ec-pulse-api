@@ -155,6 +155,11 @@ def _validate_args(name: str, args: Any) -> dict[str, Any]:
         if isinstance(interval, bool) or not isinstance(interval, int) or not 5 <= interval <= 10080:
             raise ValueError("interval_minutes must be between 5 and 10080")
     elif name == "ec_research_runs":
+        url = args.get("url")
+        if url is not None:
+            if not isinstance(url, str) or len(url) > 2000:
+                raise ValueError("url must be at most 2000 characters")
+            _validate_url(url)
         limit = args.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
