@@ -11,7 +11,7 @@
 
 ## Current implementation
 
-- 10 MCP tools
+- 12 MCP tools
 - 3 Claude Code commands
 - 3 Agent Skills
 - MCP JSON-RPC protocol handling
@@ -52,19 +52,19 @@ Do not submit until the following are truthful and complete:
 
 The legal documents still contain `［要入力］` placeholders and therefore must not be represented as final legal policies.
 
-Production smoke testing is also not marked PASS. The audit environment cannot resolve external DNS, and no production `EC_PULSE_API_KEY` is available to the test runner.
+Production smoke testing is NOT PASS. The current audit environment cannot resolve the production hostname, and no production `EC_PULSE_API_KEY` is available to the test runner.
 
-The existing repository's Vercel status currently reports `build-rate-limit`. This is separate from the Plugin source changes and must be resolved before claiming the Production deployment is healthy.
+The current `main` HEAD (`87ccd097e07aadaf5c5011b4b981974db4eac3df`) has a successful GitHub Vercel deployment status. This confirms deployment completion, but it does not replace an authenticated production smoke test.
 
 ## Evaluation status
 
-- Product discovery: NOT RUN
-- Market research: NOT RUN
-- Consumer insight: NOT RUN
-- Price monitoring: NOT RUN
+- Product discovery: NOT RUN against current production
+- Market research: NOT RUN against current production
+- Consumer insight: NOT RUN against current production
+- Price monitoring: NOT RUN against current production
 - Credit shortage: NOT RUN
 - Invalid/private URL: NOT RUN against production; local literal-private validation is covered by unit tests
 - API authentication failure: NOT RUN against production
-- MCP protocol: automated test suite added; execution result not available from the connected GitHub status interface
+- MCP protocol: automated test suite is present; latest plugin CI result is PASS on the previously audited plugin commit. Production MCP smoke remains NOT RUN
 
 Never mark a case PASS without an actual recorded run.
