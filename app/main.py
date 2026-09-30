@@ -11,7 +11,7 @@ from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field, constr, HttpUrl
 
 from app.services.billing import cancel_subscription, create_checkout, create_customer_portal, process_webhook
-from app.services.monitor_store import consume_credit, create_monitor, create_monitor_with_credit, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity, list_research_runs
+from app.services.monitor_store import consume_credit, create_monitor, create_monitor_with_credit, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity, list_research_runs, provision_customer_api_key
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
 from app.services.consumer_insights import analyze_comments
@@ -59,6 +59,9 @@ class MonitorRequest(BaseModel):
     url: HttpUrl
     interval_minutes: int = Field(default=60, ge=5, le=10080)
     webhook_url: HttpUrl
+
+class CustomerKeyRequest(BaseModel):
+    rotate: bool = False
 
 def _key_hash(api_key: str) -> str:
     return hashlib.sha256(api_key.encode()).hexdigest()
@@ -188,6 +191,44 @@ def health():
             status_code=503,
             detail={"status": "degraded", "database": "unavailable", "error": type(exc).__name__},
         ) from exc
+
+@app.post("/v1/customer/key", tags=["customer"])
+async def customer_key(request: CustomerKeyRequest, http_request: Request):
+    user = await current_user(http_request)
+    user_id = user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    try:
+        return provision_customer_api_key(user_id, rotate=request.rotate)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+@app.get("/v1/customer/account", tags=["customer"])
+async def customer_account(http_request: Request):
+    user = await current_user(http_request)
+    user_id = user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    try:
+        with psycopg.connect(os.getenv("DATABASE_URL")) as conn:
+            from app.services.monitor_store import _init
+            from app.services.monitor_store import _account_hash
+            _init(conn)
+            row = conn.execute(
+                "SELECT plan, credits_balance FROM api_accounts WHERE customer_user_id = %s",
+                (user_id,),
+            ).fetchone()
+            if not row:
+                return {"provisioned": False, "plan": "free", "credits_balance": 0, "key_prefix": None}
+            key = conn.execute(
+                "SELECT key_prefix FROM api_keys WHERE account_key_hash = (SELECT api_key_hash FROM api_accounts WHERE customer_user_id = %s) AND active = TRUE ORDER BY created_at DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+        return {"provisioned": bool(key), "plan": row[0], "credits_balance": row[1], "key_prefix": key[0] if key else None}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 @app.post("/v1/billing/checkout")
 def billing_checkout(plan: str = Query(..., pattern="^(pro|business)$"), api_key: str = Depends(get_api_key)):
