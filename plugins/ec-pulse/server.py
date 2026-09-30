@@ -55,7 +55,7 @@ TOOLS = [
         "url": {"type": "string", "format": "uri"},
         "interval_minutes": {"type": "integer", "minimum": 5, "maximum": 10080},
         "webhook_url": {"type": "string", "format": "uri"}
-    }, ["url", "webhook_url"], read_only=False, destructive=True),
+    }, ["url", "webhook_url"], read_only=False, destructive=False),
     _tool("ec_monitor_list", "List price monitors owned by the authenticated EC Pulse account.", {}),
     _tool("ec_monitor_history", "Read price history for one monitor owned by the authenticated EC Pulse account.", {
         "monitor_id": {"type": "string", "minLength": 1, "maxLength": 200},
