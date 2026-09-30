@@ -7,7 +7,17 @@ import stripe
 
 from app.services.monitor_store import _account_hash, _db_url
 
-PLANS = {"pro": "STRIPE_PRICE_PRO", "business": "STRIPE_PRICE_BUSINESS"}
+PLANS = {
+    "pro": ("STRIPE_PRICE_PRO", "STRIPE_PRO_PRICE_ID"),
+    "business": ("STRIPE_PRICE_BUSINESS", "STRIPE_BUSINESS_PRICE_ID"),
+}
+
+def _price_id(plan: str) -> str | None:
+    for env_name in PLANS.get(plan, ()):
+        value = os.getenv(env_name)
+        if value:
+            return value
+    return None
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS billing_events (
@@ -55,8 +65,8 @@ def _ts(value):
 def _price_plan(price_id: str | None) -> str | None:
     if not price_id:
         return None
-    for plan, env_name in PLANS.items():
-        if price_id == os.getenv(env_name):
+    for plan, env_names in PLANS.items():
+        if any(price_id == os.getenv(env_name) for env_name in env_names):
             return plan
     return None
 
@@ -329,7 +339,7 @@ def create_customer_portal(api_key: str) -> str:
 def create_checkout(api_key: str, plan: str) -> str:
     if plan not in PLANS:
         raise ValueError("plan must be pro or business")
-    price_id = os.getenv(PLANS[plan])
+    price_id = _price_id(plan)
     base_url = os.getenv("APP_BASE_URL")
     if not price_id or not base_url:
         raise RuntimeError("Stripe price and APP_BASE_URL are not configured")
