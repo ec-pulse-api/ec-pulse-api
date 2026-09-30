@@ -59,7 +59,7 @@ TOOLS = [
     }, ["url", "webhook_url"], read_only=False, destructive=False),
     _tool("ec_monitor_list", "List price monitors owned by the authenticated EC Pulse account.", {}),
     _tool("ec_monitor_history", "Read price history for one monitor owned by the authenticated EC Pulse account.", {
-        "monitor_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "monitor_id": {"type": "string", "format": "uuid"},
         "limit": {"type": "integer", "minimum": 1, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_monitor_opportunity", "Analyze price movement for one owned monitor and return the EC Pulse opportunity signal.", {
@@ -67,8 +67,8 @@ TOOLS = [
         "limit": {"type": "integer", "minimum": 2, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_account", "Return the authenticated account plan, remaining credits, and usage summary. The raw API key is never returned.", {}),
-    _tool("ec_research_runs", "List research runs owned by the authenticated EC Pulse account.", {"url": {"type": "string", "maxLength": 2000}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
-    _tool("ec_research_opportunity", "Analyze one research run and return product opportunity candidates.", {"run_id": {"type": "string", "minLength": 1, "maxLength": 100}}, ["run_id"]),
+    _tool("ec_research_runs", "List research runs owned by the authenticated EC Pulse account.", {"url": {"type": "string", "format": "uri", "maxLength": 2000}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
+    _tool("ec_research_opportunity", "Analyze one research run and return product opportunity candidates.", {"run_id": {"type": "string", "format": "uuid"}}, ["run_id"]),
 ]
 
 TOOL_MAP = {t["name"]: t for t in TOOLS}
@@ -84,6 +84,8 @@ def _base_url() -> str:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError("EC_PULSE_API_BASE_URL must be a valid http(s) URL")
+    if parsed.username or parsed.password:
+        raise RuntimeError("EC_PULSE_API_BASE_URL must not contain URL credentials")
     if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
         raise RuntimeError("Non-local EC_PULSE_API_BASE_URL must use HTTPS")
     return value
@@ -253,7 +255,7 @@ def _tool_error(message: str) -> dict[str, Any]:
 
 def _handle(message: Any) -> dict[str, Any] | None:
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
-        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}
+        return None if isinstance(message, dict) and message.get("id") is None else {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}
     method = message.get("method")
     request_id = message.get("id")
     if method in {"notifications/initialized", "notifications/cancelled"}:
@@ -271,10 +273,10 @@ def _handle(message: Any) -> dict[str, Any] | None:
     if method == "tools/call":
         params = message.get("params")
         if not isinstance(params, dict):
-            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "params must be an object"}}
+            return None if request_id is None else {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "params must be an object"}}
         name = params.get("name")
         if name not in TOOL_MAP:
-            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Unknown tool"}}
+            return None if request_id is None else {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Unknown tool"}}
         try:
             value = _call_tool(name, params.get("arguments") or {})
             if request_id is None:
