@@ -36,6 +36,8 @@ The raw API key is never stored in the repository or returned by MCP tools.
 - `ec_monitor_history` -> `GET /v1/monitors/{id}/history`
 - `ec_monitor_opportunity` -> `GET /v1/monitors/{id}/opportunity`
 - `ec_account` -> `GET /v1/account`
+- `ec_research_runs` -> `GET /v1/research/runs`
+- `ec_research_opportunity` -> `GET /v1/research/runs/{run_id}/opportunity`
 
 No endpoint is invented on the plugin side.
 

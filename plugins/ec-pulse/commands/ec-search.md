@@ -8,6 +8,8 @@ allowed-tools:
   - mcp__plugin_ec-pulse_ec-pulse__ec_product_compare
 ---
 
+User request/context: $ARGUMENTS
+
 Search EC Pulse for the requested product or category.
 
 Return only data actually returned by EC Pulse:

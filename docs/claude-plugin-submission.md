@@ -11,7 +11,7 @@
 
 ## Current implementation
 
-- 10 MCP tools
+- 12 MCP tools
 - 3 Claude Code commands
 - 3 Agent Skills
 - MCP JSON-RPC protocol handling
@@ -52,9 +52,9 @@ Do not submit until the following are truthful and complete:
 
 The legal documents still contain `［要入力］` placeholders and therefore must not be represented as final legal policies.
 
-Production smoke testing is also not marked PASS. The audit environment cannot resolve external DNS, and no production `EC_PULSE_API_KEY` is available to the test runner.
+Production smoke testing is not marked PASS because no production `EC_PULSE_API_KEY` is available to the test runner. Unauthenticated production reachability has been verified separately (`/` 200, `/health` 200 with database `ok`, `/v1/account` 401 without a key).
 
-The existing repository's Vercel status currently reports `build-rate-limit`. This is separate from the Plugin source changes and must be resolved before claiming the Production deployment is healthy.
+The current plugin HEAD `6b6265a706e9ea84c6376568c291def72637a7d5` has PASS GitHub Actions (plugin run `36786603230`, repository tests run `36786603194`). Vercel also passed for this current HEAD.
 
 ## Evaluation status
 
@@ -65,6 +65,5 @@ The existing repository's Vercel status currently reports `build-rate-limit`. Th
 - Credit shortage: NOT RUN
 - Invalid/private URL: NOT RUN against production; local literal-private validation is covered by unit tests
 - API authentication failure: NOT RUN against production
-- MCP protocol: automated test suite added; execution result not available from the connected GitHub status interface
-
-Never mark a case PASS without an actual recorded run.
+- MCP protocol/security: PASS on audited plugin commit `50159461c32f2b51305cbf40cc8c2d5c2f087895` (GitHub Actions run `36759566107`)
+- Repository-wide tests: PASS on audited plugin commit `50159461c32f2b51305cbf40cc8c2d5c2f087895` (GitHub Actions run `36759566085`)

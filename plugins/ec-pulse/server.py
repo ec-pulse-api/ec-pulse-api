@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
@@ -38,13 +39,13 @@ TOOLS = [
         "limit": {"type": "integer", "minimum": 1, "maximum": 10},
     }, ["query"]),
     _tool("ec_product_get", "Retrieve normalized product data for one public product URL through EC Pulse.", {
-        "url": {"type": "string", "format": "uri", "minLength": 1}
+        "url": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 2000}
     }, ["url"]),
     _tool("ec_product_compare", "Compare normalized product data and observed prices for 2 to 20 public product URLs.", {
-        "urls": {"type": "array", "items": {"type": "string", "format": "uri"}, "minItems": 2, "maxItems": 20}
+        "urls": {"type": "array", "items": {"type": "string", "format": "uri", "maxLength": 2000}, "minItems": 2, "maxItems": 20}
     }, ["urls"]),
     _tool("ec_research_ingest", "Collect publicly accessible comments from supported URLs and return EC Pulse research analysis.", {
-        "urls": {"type": "array", "items": {"type": "string", "format": "uri"}, "minItems": 1, "maxItems": 20},
+        "urls": {"type": "array", "items": {"type": "string", "format": "uri", "maxLength": 2000}, "minItems": 1, "maxItems": 20},
         "max_comments_per_url": {"type": "integer", "minimum": 1, "maximum": 500}
     }, ["urls"]),
     _tool("ec_consumer_insights", "Analyze supplied customer comments with EC Pulse's rule-based pain-point and term extraction.", {
@@ -52,20 +53,22 @@ TOOLS = [
         "source": {"type": "string", "maxLength": 50}
     }, ["comments"]),
     _tool("ec_monitor_create", "Create a price monitor. This changes persistent account state and requires explicit user intent.", {
-        "url": {"type": "string", "format": "uri"},
+        "url": {"type": "string", "format": "uri", "maxLength": 2000},
         "interval_minutes": {"type": "integer", "minimum": 5, "maximum": 10080},
-        "webhook_url": {"type": "string", "format": "uri"}
+        "webhook_url": {"type": "string", "format": "uri", "maxLength": 2000}
     }, ["url", "webhook_url"], read_only=False, destructive=False),
     _tool("ec_monitor_list", "List price monitors owned by the authenticated EC Pulse account.", {}),
     _tool("ec_monitor_history", "Read price history for one monitor owned by the authenticated EC Pulse account.", {
-        "monitor_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "monitor_id": {"type": "string", "format": "uuid", "maxLength": 200},
         "limit": {"type": "integer", "minimum": 1, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_monitor_opportunity", "Analyze price movement for one owned monitor and return the EC Pulse opportunity signal.", {
-        "monitor_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "monitor_id": {"type": "string", "format": "uuid", "maxLength": 200},
         "limit": {"type": "integer", "minimum": 2, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_account", "Return the authenticated account plan, remaining credits, and usage summary. The raw API key is never returned.", {}),
+    _tool("ec_research_runs", "List research runs owned by the authenticated EC Pulse account.", {"url": {"type": "string", "format": "uri", "maxLength": 2000}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}),
+    _tool("ec_research_opportunity", "Analyze one research run and return product opportunity candidates.", {"run_id": {"type": "string", "format": "uuid"}}, ["run_id"]),
 ]
 
 TOOL_MAP = {t["name"]: t for t in TOOLS}
@@ -81,13 +84,21 @@ def _base_url() -> str:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError("EC_PULSE_API_BASE_URL must be a valid http(s) URL")
+    if parsed.username or parsed.password:
+        raise RuntimeError("EC_PULSE_API_BASE_URL must not contain URL credentials")
     if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
         raise RuntimeError("Non-local EC_PULSE_API_BASE_URL must use HTTPS")
+    if parsed.query or parsed.fragment:
+        raise RuntimeError("EC_PULSE_API_BASE_URL must not contain query or fragment")
+    if parsed.path not in {"", "/"}:
+        raise RuntimeError("EC_PULSE_API_BASE_URL must not contain an API path prefix")
     return value
 
 def _validate_url(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("URL must be a non-empty string")
+    if len(value) > 2000:
+        raise ValueError("URL must be at most 2000 characters")
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("URL must be an absolute http(s) URL")
@@ -149,10 +160,24 @@ def _validate_args(name: str, args: Any) -> dict[str, Any]:
         interval = args.get("interval_minutes", 60)
         if isinstance(interval, bool) or not isinstance(interval, int) or not 5 <= interval <= 10080:
             raise ValueError("interval_minutes must be between 5 and 10080")
+    elif name == "ec_research_runs":
+        url = args.get("url")
+        if url is not None:
+            if not isinstance(url, str) or len(url) > 2000:
+                raise ValueError("url must be at most 2000 characters")
+            _validate_url(url)
+        limit = args.get("limit", 20)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+    elif name == "ec_research_opportunity":
+        try: uuid.UUID(args.get("run_id", ""))
+        except (ValueError, TypeError, AttributeError): raise ValueError("run_id must be a valid UUID")
     elif name in {"ec_monitor_history", "ec_monitor_opportunity"}:
         monitor_id = args.get("monitor_id")
         if not isinstance(monitor_id, str) or not 1 <= len(monitor_id) <= 200:
             raise ValueError("monitor_id must be 1-200 characters")
+        try: uuid.UUID(monitor_id)
+        except (ValueError, AttributeError): raise ValueError("monitor_id must be a valid UUID")
         if "limit" in args:
             limit = args["limit"]
             minimum = 2 if name == "ec_monitor_opportunity" else 1
@@ -195,7 +220,9 @@ def _api_request(method: str, path: str, *, body: dict[str, Any] | None = None, 
         if exc.code == 404:
             raise RuntimeError("EC Pulse resource was not found (404)") from exc
         if exc.code == 429:
-            raise RuntimeError("EC Pulse rate limit exceeded (429)") from exc
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            suffix = f"; Retry-After: {retry_after}" if retry_after else ""
+            raise RuntimeError(f"EC Pulse rate limit exceeded (429){suffix}") from exc
         if 400 <= exc.code < 500:
             raise RuntimeError(f"EC Pulse request was rejected ({exc.code})") from exc
         raise RuntimeError(f"EC Pulse upstream service error ({exc.code})") from exc
@@ -228,6 +255,10 @@ def _call_tool(name: str, args: Any) -> Any:
         return _api_request("GET", f"/v1/monitors/{quote(args['monitor_id'], safe='')}/opportunity", query={"limit": args.get("limit", 100)})
     if name == "ec_account":
         return _api_request("GET", "/v1/account")
+    if name == "ec_research_runs":
+        return _api_request("GET", "/v1/research/runs", query={"url": args.get("url"), "limit": args.get("limit", 20)})
+    if name == "ec_research_opportunity":
+        return _api_request("GET", f"/v1/research/runs/{quote(args['run_id'], safe='')}/opportunity")
     raise ValueError("Unknown tool")
 
 def _tool_error(message: str) -> dict[str, Any]:
@@ -235,28 +266,40 @@ def _tool_error(message: str) -> dict[str, Any]:
 
 def _handle(message: Any) -> dict[str, Any] | None:
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
-        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}
+        return None if isinstance(message, dict) and message.get("id") is None else {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}
     method = message.get("method")
     request_id = message.get("id")
-    if method == "notifications/initialized":
+    if method in {"notifications/initialized", "notifications/cancelled"}:
         return None
+    if method == "ping":
+        return None if request_id is None else {"jsonrpc": "2.0", "id": request_id, "result": {}}
     if method == "initialize":
+        if request_id is None:
+            return None
         return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "ec-pulse", "version": "0.1.0"}}}
     if method == "tools/list":
+        if request_id is None:
+            return None
         return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}}
     if method == "tools/call":
         params = message.get("params")
         if not isinstance(params, dict):
-            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "params must be an object"}}
+            return None if request_id is None else {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "params must be an object"}}
         name = params.get("name")
         if name not in TOOL_MAP:
-            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Unknown tool"}}
+            return None if request_id is None else {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Unknown tool"}}
         try:
             value = _call_tool(name, params.get("arguments") or {})
+            if request_id is None:
+                return None
             return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False, separators=(",", ":"))}], "isError": False}}
         except (ValueError, RuntimeError) as exc:
+            if request_id is None:
+                return None
             return {"jsonrpc": "2.0", "id": request_id, "result": _tool_error(str(exc))}
         except Exception as exc:
+            if request_id is None:
+                return None
             return {"jsonrpc": "2.0", "id": request_id, "result": _tool_error(f"Unexpected plugin error: {type(exc).__name__}")}
     if method is None:
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": "Invalid Request"}}
