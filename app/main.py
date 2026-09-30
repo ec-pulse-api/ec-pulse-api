@@ -192,6 +192,60 @@ def health():
             detail={"status": "degraded", "database": "unavailable", "error": type(exc).__name__},
         ) from exc
 
+@app.get("/billing", include_in_schema=False)
+async def billing_page(request: Request):
+    user = await current_user(request)
+    user_id = user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    return {"service": "EC Pulse API", "billing": "/v1/customer/account", "status": "authenticated", "user_id": user_id}
+
+
+@app.get("/billing/success", include_in_schema=False)
+async def billing_success(request: Request, session_id: str | None = Query(default=None)):
+    user = await current_user(request)
+    user_id = user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    try:
+        from app.services.monitor_store import _init, _db_url
+        with psycopg.connect(_db_url()) as conn:
+            _init(conn)
+            row = conn.execute(
+                """SELECT plan, credits_balance, subscription_status,
+                          stripe_customer_id, stripe_subscription_id,
+                          current_period_start, current_period_end,
+                          cancel_at_period_end
+                   FROM api_accounts
+                   WHERE customer_user_id = %s""",
+                (user_id,),
+            ).fetchone()
+        if not row:
+            return {"status": "pending", "message": "Payment received. Waiting for subscription webhook.", "checkout_session_id": session_id}
+        return {
+            "status": "active" if row[2] in {"active", "trialing", "past_due"} else "pending",
+            "plan": row[0],
+            "credits_balance": row[1],
+            "subscription_status": row[2],
+            "stripe_customer_id": row[3],
+            "stripe_subscription_id": row[4],
+            "current_period_start": row[5].isoformat() if row[5] else None,
+            "current_period_end": row[6].isoformat() if row[6] else None,
+            "cancel_at_period_end": bool(row[7]),
+            "checkout_session_id": session_id,
+        }
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/billing/cancel", include_in_schema=False)
+async def billing_cancel_page(request: Request):
+    user = await current_user(request)
+    if not user.get("id"):
+        raise HTTPException(status_code=401, detail="Authenticated user id is missing")
+    return {"status": "cancelled", "message": "Checkout was cancelled. No subscription change was applied."}
+
+
 @app.post("/v1/customer/key", tags=["customer"])
 async def customer_key(request: CustomerKeyRequest, http_request: Request):
     user = await current_user(http_request)
