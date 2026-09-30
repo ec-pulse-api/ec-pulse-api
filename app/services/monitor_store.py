@@ -243,6 +243,57 @@ def provision_customer_api_key(user_id: str, rotate: bool = False) -> dict:
         conn.commit()
     return {"created": True, "api_key": raw_key, "key_prefix": raw_key[:12], "plan": plan, "credits_balance": balance, "warning": "Store this API key securely. It will not be shown again."}
 
+def list_customer_api_keys(user_id: str) -> list[dict]:
+    user_id = user_id.strip()
+    if not user_id or len(user_id) > 255:
+        raise ValueError("Invalid customer user id")
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        rows = conn.execute(
+            """SELECT k.key_prefix, k.active, k.created_at, k.last_used_at,
+                      a.plan, a.credits_balance
+               FROM api_keys k
+               JOIN api_accounts a ON a.api_key_hash = k.account_key_hash
+               WHERE a.customer_user_id = %s
+               ORDER BY k.created_at DESC""",
+            (user_id,),
+        ).fetchall()
+    return [
+        {
+            "key_prefix": row[0],
+            "active": row[1],
+            "created_at": row[2].isoformat(),
+            "last_used_at": row[3].isoformat() if row[3] else None,
+            "plan": row[4],
+            "credits_balance": row[5],
+        }
+        for row in rows
+    ]
+
+
+def revoke_customer_api_key(user_id: str, key_prefix: str) -> bool:
+    user_id = user_id.strip()
+    key_prefix = key_prefix.strip()
+    if not user_id or len(user_id) > 255:
+        raise ValueError("Invalid customer user id")
+    if not key_prefix or len(key_prefix) > 32:
+        raise ValueError("Invalid API key prefix")
+    with psycopg.connect(_db_url()) as conn:
+        _init(conn)
+        cur = conn.execute(
+            """UPDATE api_keys k
+               SET active = FALSE
+               FROM api_accounts a
+               WHERE k.account_key_hash = a.api_key_hash
+                 AND a.customer_user_id = %s
+                 AND k.key_prefix = %s
+                 AND k.active = TRUE""",
+            (user_id, key_prefix),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def list_api_keys() -> list[dict]:
     with psycopg.connect(_db_url()) as conn:
         _init(conn)
