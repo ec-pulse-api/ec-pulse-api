@@ -810,6 +810,56 @@ async def _search_marketplace(marketplace: str, query: str, limit: int) -> list[
     return _links(body.decode("utf-8"), marketplace)[:limit]
 
 
+
+async def _search_bing_marketplace(query: str, limit: int) -> list[dict]:
+    """Last-resort public discovery when marketplace APIs/search HTML yield no links."""
+    search_url = "https://www.bing.com/search?q=" + quote_plus(
+        query + " (site:shopping.yahoo.co.jp OR site:item.rakuten.co.jp OR site:amazon.co.jp)"
+    ) + "&setlang=ja-JP&cc=JP"
+    try:
+        async with safe_async_client(
+            follow_redirects=True,
+            timeout=12.0,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; EC-Pulse/0.12)"},
+        ) as client:
+            response = await client.get(search_url)
+            response.raise_for_status()
+            html = await response.aread()
+    except Exception:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    found: list[dict] = []
+    seen: set[str] = set()
+    for item in soup.select("li.b_algo"):
+        anchor = item.select_one("h2 a[href]")
+        if not anchor:
+            continue
+        href = str(anchor.get("href") or "")
+        title = " ".join(anchor.stripped_strings)
+        if not href.startswith(("http://", "https://")) or not title:
+            continue
+        try:
+            host = (urlparse(href).hostname or "").lower()
+        except Exception:
+            continue
+        if host == "shopping.yahoo.co.jp" or host.endswith(".shopping.yahoo.co.jp"):
+            marketplace = "yahoo"
+        elif host == "item.rakuten.co.jp" or host.endswith(".item.rakuten.co.jp"):
+            marketplace = "rakuten"
+        elif host == "amazon.co.jp" or host.endswith(".amazon.co.jp"):
+            marketplace = "amazon"
+        else:
+            continue
+        if href in seen:
+            continue
+        seen.add(href)
+        found.append({"url": href.split("?")[0], "title": title, "marketplace": marketplace})
+        if len(found) >= limit:
+            break
+    return found
+
+
 async def search_products(query: str, marketplaces: list[str], limit: int) -> dict:
     results_by_marketplace = await asyncio.gather(
         *(_search_amazon_official(query, limit) if marketplace == "amazon" and os.getenv("AMAZON_CLIENT_ID") and os.getenv("AMAZON_CLIENT_SECRET") and os.getenv("AMAZON_PARTNER_TAG") else _search_yahoo_official(query, limit) if marketplace == "yahoo" and os.getenv("YAHOO_SHOPPING_APP_ID") else _search_rakuten_official(query, limit) if marketplace == "rakuten" and os.getenv("RAKUTEN_APPLICATION_ID") and os.getenv("RAKUTEN_ACCESS_KEY") else _search_marketplace(marketplace, query, limit) for marketplace in marketplaces),
@@ -862,6 +912,26 @@ async def search_products(query: str, marketplaces: list[str], limit: int) -> di
         for group in candidates
         for item in group["results"]
     ]
+
+    # Do not return an empty catalog just because one or more marketplace
+    # credentials/scrapers failed. Use public search as a last-resort
+    # discovery path, then normalize the discovered product pages.
+    if not flat:
+        discovered = await _search_bing_marketplace(query, max(limit * len(marketplaces), limit))
+        if discovered:
+            normalized = await asyncio.gather(
+                *(fetch_product_cached(item["url"]) for item in discovered),
+                return_exceptions=True,
+            )
+            for item, product_result in zip(discovered, normalized):
+                if isinstance(product_result, Exception):
+                    continue
+                payload, cache_hit = product_result
+                flat.append({
+                    "url": item["url"],
+                    "cache_hit": cache_hit,
+                    "product": payload,
+                })
     priced = [
         item for item in flat
         if item["product"].get("pricing", {}).get("price") is not None
