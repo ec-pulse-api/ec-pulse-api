@@ -831,10 +831,17 @@ async def _search_bing_marketplace(query: str, limit: int) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     found: list[dict] = []
     seen: set[str] = set()
-    for item in soup.select("li.b_algo"):
-        anchor = item.select_one("h2 a[href]")
-        if not anchor:
-            continue
+
+    # Bing changes its result-item markup periodically. Do not depend on
+    # li.b_algo being present; scan all result links and keep only marketplace
+    # product hosts. This makes the public fallback resilient to markup drift.
+    anchors = soup.select("li.b_algo h2 a[href]")
+    if not anchors:
+        anchors = soup.select("h2 a[href]")
+    if not anchors:
+        anchors = soup.find_all("a", href=True)
+
+    for anchor in anchors:
         href = str(anchor.get("href") or "")
         title = " ".join(anchor.stripped_strings)
         if not href.startswith(("http://", "https://")) or not title:
@@ -851,10 +858,11 @@ async def _search_bing_marketplace(query: str, limit: int) -> list[dict]:
             marketplace = "amazon"
         else:
             continue
-        if href in seen:
+        clean_url = href.split("?")[0]
+        if clean_url in seen:
             continue
-        seen.add(href)
-        found.append({"url": href.split("?")[0], "title": title, "marketplace": marketplace})
+        seen.add(clean_url)
+        found.append({"url": clean_url, "title": title, "marketplace": marketplace})
         if len(found) >= limit:
             break
     return found
