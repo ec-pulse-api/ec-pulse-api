@@ -43,8 +43,6 @@ plugins/ec-pulse/
 
 ## Submission positioning
 
-Category: Developer Tools / Commerce & Shopping / Data & Analytics
-
 Primary use cases:
 
 1. Japanese e-commerce product discovery and comparison.
@@ -54,6 +52,10 @@ Primary use cases:
 The plugin does not expose EC Pulse secrets. The customer's API key remains in the local process environment and is sent only to the configured EC Pulse API.
 
 ## Marketplace submission
+
+Anthropic's September 25, 2026 submission flow accepts GitHub-hosted plugin bundles containing MCP servers and skills; Claude Code bundles may also include commands, hooks, agents, and LSPs. The submission portal performs automated validation and safety scanning before review.
+
+Official submission portal: `https://platform.claude.com/plugins/submit`
 
 Submit the GitHub repository through Anthropic's Claude Plugin Submission Portal after the MCP bridge has been smoke-tested with a real EC Pulse API key.
 
