@@ -221,7 +221,7 @@ async def billing_success(request: Request, session_id: str | None = Query(defau
                 (user_id,),
             ).fetchone()
         if not row:
-            return {"status": "pending", "message": "Payment received. Waiting for subscription webhook.", "checkout_session_id": session_id}
+            return {"status": "pending", "message": "Payment received. Waiting for subscription webhook."}
         return {
             "status": "active" if row[2] in {"active", "trialing", "past_due"} else "pending",
             "plan": row[0],
@@ -230,7 +230,6 @@ async def billing_success(request: Request, session_id: str | None = Query(defau
             "current_period_start": row[5].isoformat() if row[5] else None,
             "current_period_end": row[6].isoformat() if row[6] else None,
             "cancel_at_period_end": bool(row[7]),
-            "checkout_session_id": session_id,
         }
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
