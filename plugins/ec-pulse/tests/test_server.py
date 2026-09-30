@@ -142,10 +142,15 @@ class SecurityTests(unittest.TestCase):
         with patch.dict(os.environ, {"EC_PULSE_API_BASE_URL": "https://user:pass@example.com"}, clear=True):
             with self.assertRaises(RuntimeError):
                 server._base_url()
-        for base in ("https://example.com/api", "https://example.com/?x=1", "https://example.com/#x"):
+        for base in ("https://example.com/api", "https://example.com/?x=1", "https://example.com/#x", "https://127.0.0.1"):
             with patch.dict(os.environ, {"EC_PULSE_API_BASE_URL": base}, clear=True):
                 with self.assertRaises(RuntimeError):
                     server._base_url()
+        with patch.dict(os.environ, {"EC_PULSE_API_BASE_URL": "https://public.example"}, clear=True), patch.object(
+            server.socket, "getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))]
+        ):
+            with self.assertRaises(RuntimeError):
+                server._base_url()
 
     def test_signature(self):
         self.assertEqual(len(server._sign("secret","1700000000","POST","/v1/products/search",b"{}")),71)
