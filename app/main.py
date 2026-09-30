@@ -14,6 +14,7 @@ from app.services.billing import cancel_subscription, create_checkout, create_cu
 from app.services.monitor_store import consume_credit, create_monitor, create_monitor_with_credit, ensure_api_account, get_account_usage, get_price_history, get_price_opportunity, list_monitors, run_due_monitors, validate_api_key, save_research_run, get_research_opportunity, list_research_runs, provision_customer_api_key, list_customer_api_keys, revoke_customer_api_key, get_customer_usage, get_customer_usage_alert
 from app.services.product_cache import fetch_product_cached
 from app.services.product_search import search_products
+from app.services.patrol import run_patrol
 from app.services.consumer_insights import analyze_comments
 from app.services.research_ingest import fetch_public_comments
 from app.services.rate_limit import check_rate_limit
@@ -614,6 +615,14 @@ def account(request: Request, response: Response, api_key: str = Depends(get_api
         return usage
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+@app.get("/api/cron/patrol")
+async def patrol(authorization: str | None = Header(default=None)):
+    secret = os.getenv("CRON_SECRET")
+    if not secret or not authorization or not secrets.compare_digest(authorization, f"Bearer {secret}"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    report = await run_patrol()
+    return report
 
 @app.get("/api/cron/check-monitors")
 async def check_monitors(authorization:str|None=Header(default=None)):
