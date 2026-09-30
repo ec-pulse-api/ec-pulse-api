@@ -63,7 +63,7 @@ TOOLS = [
         "limit": {"type": "integer", "minimum": 1, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_monitor_opportunity", "Analyze price movement for one owned monitor and return the EC Pulse opportunity signal.", {
-        "monitor_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "monitor_id": {"type": "string", "format": "uuid"},
         "limit": {"type": "integer", "minimum": 2, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_account", "Return the authenticated account plan, remaining credits, and usage summary. The raw API key is never returned.", {}),
