@@ -1,0 +1,68 @@
+import importlib.util
+import json
+import os
+from pathlib import Path
+import unittest
+from unittest.mock import patch
+
+SERVER = Path(__file__).resolve().parents[1] / "server.py"
+spec = importlib.util.spec_from_file_location("ec_pulse_server", SERVER)
+server = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(server)
+
+class MCPProtocolTests(unittest.TestCase):
+    def test_initialize(self):
+        r=server._handle({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})
+        self.assertEqual(r["result"]["serverInfo"]["name"],"ec-pulse")
+    def test_tools_list(self):
+        r=server._handle({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
+        self.assertEqual(len(r["result"]["tools"]),10)
+        self.assertIn("ec_product_search",{x["name"] for x in r["result"]["tools"]})
+    def test_unknown_method(self):
+        r=server._handle({"jsonrpc":"2.0","id":3,"method":"nope","params":{}})
+        self.assertEqual(r["error"]["code"],-32601)
+    def test_unknown_tool(self):
+        r=server._handle({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"nope","arguments":{}}})
+        self.assertEqual(r["error"]["code"],-32602)
+    def test_invalid_request(self):
+        r=server._handle({"jsonrpc":"1.0","id":5,"method":"initialize"})
+        self.assertEqual(r["error"]["code"],-32600)
+    def test_parse_error(self):
+        with patch("sys.stdin",iter(["{broken\\n"])),patch("sys.stdout") as out:
+            server.main()
+            emitted=out.write.call_args.args[0]
+        self.assertEqual(json.loads(emitted)["error"]["code"],-32700)
+
+class ValidationTests(unittest.TestCase):
+    def test_empty_query(self):
+        with self.assertRaises(ValueError): server._validate_args("ec_product_search",{"query":""})
+    def test_invalid_url(self):
+        with self.assertRaises(ValueError): server._validate_url("not-a-url")
+    def test_compare_minimum(self):
+        with self.assertRaises(ValueError): server._validate_args("ec_product_compare",{"urls":["https://example.com"]})
+    def test_unknown_argument(self):
+        with self.assertRaises(ValueError): server._validate_args("ec_account",{"api_key":"secret"})
+
+class SecurityTests(unittest.TestCase):
+    def test_key_missing(self):
+        with patch.dict(os.environ,{},clear=True):
+            with self.assertRaises(RuntimeError): server._api_key()
+    def test_key_not_leaked(self):
+        secret="ecp_live_super_secret_test_value"
+        with patch.dict(os.environ,{"EC_PULSE_API_KEY":secret},clear=True),patch.object(server,"_api_request",side_effect=RuntimeError("EC Pulse authentication failed (401)")):
+            r=server._handle({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"ec_account","arguments":{}}})
+        self.assertNotIn(secret,r["result"]["content"][0]["text"])
+    def test_no_retry(self):
+        calls=[]
+        def fail(*a,**k):
+            calls.append(1)
+            raise RuntimeError("EC Pulse rate limit exceeded (429)")
+        with patch.object(server,"_api_request",side_effect=fail):
+            server._handle({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ec_account","arguments":{}}})
+        self.assertEqual(len(calls),1)
+    def test_signature(self):
+        self.assertEqual(len(server._sign("secret","1700000000","POST","/v1/products/search",b"{}")),71)
+
+if __name__=="__main__":
+    unittest.main()
