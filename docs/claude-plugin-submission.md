@@ -65,8 +65,8 @@ The current PR head is `c9f7c54d96c5fcae785f9e8d0031992f80985e8d`. GitHub Action
 - Credit shortage: NOT RUN
 - Invalid/private URL: NOT RUN against production; local literal-private validation is covered by unit tests
 - API authentication failure: NOT RUN against production
-- MCP protocol/security: PASS on current PR head `c9f7c54d96c5fcae785f9e8d0031992f80985e8d` (GitHub Actions run `36733563325`)
-- Repository-wide tests: PASS on current PR head `c9f7c54d96c5fcae785f9e8d0031992f80985e8d` (GitHub Actions run `36733563889`)
-- Vercel current-head status: NOT VERIFIED
+- MCP protocol/security: PASS on current PR head `50159461c32f2b51305cbf40cc8c2d5c2f087895` (GitHub Actions run `36759566107`)
+- Repository-wide tests: PASS on current PR head `50159461c32f2b51305cbf40cc8c2d5c2f087895` (GitHub Actions run `36759566085`)
+- Vercel current-head status: PASS — deployment completed
 
 Never mark a case PASS without an actual recorded run.
