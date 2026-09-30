@@ -1,0 +1,64 @@
+from fastapi.testclient import TestClient
+
+from app import main
+
+
+def test_customer_key_requires_google_auth(monkeypatch):
+    async def fake_current_user(request):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    monkeypatch.setattr(main, "current_user", fake_current_user)
+    client = TestClient(main.app)
+
+    response = client.post("/v1/customer/key", json={})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Not authenticated"
+
+
+def test_customer_key_provisions_for_authenticated_user(monkeypatch):
+    async def fake_current_user(request):
+        return {"id": "user-123"}
+
+    def fake_provision(user_id, rotate=False):
+        assert user_id == "user-123"
+        assert rotate is False
+        return {
+            "created": True,
+            "api_key": "ecp_live_test_key",
+            "key_prefix": "ecp_live_test",
+            "plan": "free",
+            "credits_balance": 100,
+        }
+
+    monkeypatch.setattr(main, "current_user", fake_current_user)
+    monkeypatch.setattr(main, "provision_customer_api_key", fake_provision)
+    client = TestClient(main.app)
+
+    response = client.post("/v1/customer/key", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] is True
+    assert body["api_key"] == "ecp_live_test_key"
+    assert body["plan"] == "free"
+
+
+def test_customer_key_rotation_is_forwarded(monkeypatch):
+    async def fake_current_user(request):
+        return {"id": "user-456"}
+
+    def fake_provision(user_id, rotate=False):
+        assert user_id == "user-456"
+        assert rotate is True
+        return {"created": True, "api_key": "ecp_live_rotated"}
+
+    monkeypatch.setattr(main, "current_user", fake_current_user)
+    monkeypatch.setattr(main, "provision_customer_api_key", fake_provision)
+    client = TestClient(main.app)
+
+    response = client.post("/v1/customer/key", json={"rotate": True})
+
+    assert response.status_code == 200
+    assert response.json()["api_key"] == "ecp_live_rotated"
