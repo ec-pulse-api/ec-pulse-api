@@ -825,3 +825,17 @@ def test_checkout_reuses_linked_stripe_customer(monkeypatch):
     monkeypatch.setattr("app.services.monitor_store._account_hash", lambda key: "account-hash")
 
     assert billing.create_checkout("customer-key", "pro") == "https://checkout.example/customer"
+
+
+def test_unknown_active_stripe_price_does_not_downgrade_to_free(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    conn = FakeConn()
+    subscription = _subscription("active")
+    subscription["items"]["data"][0]["price"]["id"] = "price_unconfigured"
+    try:
+        _apply_subscription(conn, subscription, 100)
+    except RuntimeError as exc:
+        assert "unrecognized price" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+    assert conn.updates == 0
