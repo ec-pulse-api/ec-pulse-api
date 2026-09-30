@@ -26,15 +26,17 @@ def _store_report(report: dict) -> None:
         conn.commit()
 
 
-async def _send_report(report: dict) -> None:
+async def _send_report(report: dict) -> bool:
     webhook = os.getenv("PATROL_REPORT_WEBHOOK_URL")
     if not webhook:
-        return
+        return True
     try:
         async with httpx.AsyncClient(timeout=8, follow_redirects=False) as client:
-            await client.post(webhook, json=report)
+            response = await client.post(webhook, json=report)
+            response.raise_for_status()
+        return True
     except Exception:
-        pass
+        return False
 
 
 async def run_patrol() -> dict:
@@ -83,6 +85,7 @@ async def run_patrol() -> dict:
         "ok": not failures,
         "agent": "patrol-ai",
         "mode": "observe-repair-report",
+        "repair_policy": "allowlisted-retry-only",
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
         "repairs": repairs,
@@ -92,6 +95,17 @@ async def run_patrol() -> dict:
     try:
         _store_report(report)
     except Exception as exc:
+        report["ok"] = False
         report["repairs"].append({"type": "report-persistence-failure", "action": "escalate", "error": type(exc).__name__})
-    await _send_report(report)
+        report["failures"].append({"name": "report-persistence", "ok": False, "error": type(exc).__name__})
+
+    delivered = await _send_report(report)
+    report["report_delivery"] = {
+        "webhook_configured": bool(os.getenv("PATROL_REPORT_WEBHOOK_URL")),
+        "delivered": delivered,
+    }
+    if not delivered:
+        report["ok"] = False
+        report["repairs"].append({"type": "report-delivery-failure", "action": "escalate", "error": "webhook_delivery_failed"})
+        report["failures"].append({"name": "report-delivery", "ok": False, "error": "webhook_delivery_failed"})
     return report
