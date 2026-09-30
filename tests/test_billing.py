@@ -779,3 +779,49 @@ def test_expired_pending_completed_checkout_waits_for_webhook(monkeypatch):
         assert "waiting for webhook" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_checkout_reuses_linked_stripe_customer(monkeypatch):
+    import app.services.billing as billing
+
+    class Cursor:
+        def fetchone(self):
+            return ("account-hash", "cus_existing", None, None, None, None, None)
+
+    class Conn:
+        def execute(self, sql, params=()):
+            return Cursor()
+        def commit(self):
+            pass
+        def rollback(self):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    class Session:
+        id = "cs_customer"
+        url = "https://checkout.example/customer"
+
+    class Checkout:
+        @staticmethod
+        def create(**kwargs):
+            assert kwargs["customer"] == "cus_existing"
+            assert kwargs["line_items"][0]["price"] == "price_pro"
+            assert kwargs["mode"] == "subscription"
+            return Session()
+
+    FakeStripe = type("FakeStripe", (), {
+        "checkout": type("CheckoutContainer", (), {"Session": Checkout})
+    })
+
+    monkeypatch.setenv("STRIPE_PRICE_PRO", "price_pro")
+    monkeypatch.setenv("APP_BASE_URL", "https://example.com")
+    monkeypatch.setattr(billing.psycopg, "connect", lambda *args, **kwargs: Conn())
+    monkeypatch.setattr(billing, "_init_billing", lambda conn: None)
+    monkeypatch.setattr(billing, "_db_url", lambda: "postgresql://test/test")
+    monkeypatch.setattr(billing, "_stripe", lambda: FakeStripe())
+    monkeypatch.setattr("app.services.monitor_store._account_hash", lambda key: "account-hash")
+
+    assert billing.create_checkout("customer-key", "pro") == "https://checkout.example/customer"
