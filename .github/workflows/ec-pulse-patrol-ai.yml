@@ -63,22 +63,34 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run plugin tests
+        id: plugin_tests
         run: python -m unittest discover -s plugins/ec-pulse/tests -v
 
       - name: Run repository tests
+        id: repo_tests
         run: python -m unittest discover -s tests -v
 
       - name: Check patch hygiene
+        id: hygiene
         run: git diff --check
 
       - name: Publish repair PR or issue
+        if: ${{ always() }}
         env:
           GH_TOKEN: ${{ github.token }}
           PATROL_STATUS: ${{ steps.patrol.outputs.status }}
+          PLUGIN_TESTS: ${{ steps.plugin_tests.outcome }}
+          REPO_TESTS: ${{ steps.repo_tests.outcome }}
+          HYGIENE: ${{ steps.hygiene.outcome }}
         shell: bash
         run: |
           set -e
-          if ! git diff --quiet; then
+          tests_ok=false
+          if [ "$PLUGIN_TESTS" = "success" ] && [ "$REPO_TESTS" = "success" ] && [ "$HYGIENE" = "success" ]; then
+            tests_ok=true
+          fi
+
+          if [ "$tests_ok" = "true" ] && [ "$PATROL_STATUS" = "0" ] && ! git diff --quiet; then
             branch="patrol/repair-${GITHUB_RUN_ID}"
             git switch -c "$branch"
             git config user.name "github-actions[bot]"
@@ -86,10 +98,33 @@ jobs:
             git add -A
             git commit -m "chore: apply EC Pulse patrol repairs"
             git push --set-upstream origin "$branch"
-            gh pr create --base main --head "$branch" --title "chore: EC Pulse Patrol AI repairs" --body "Automated by EC Pulse Patrol AI. Safe mechanical repairs were applied and repository tests passed. This PR is intentionally not auto-merged. See the workflow run summary for findings."
-          elif [ "$PATROL_STATUS" != "0" ]; then
-            gh issue create --title "[Patrol AI] unresolved EC Pulse repository issue" --body-file patrol.json
-            exit 1
-          else
-            echo "No repair required."
+            gh pr create --base main --head "$branch" --title "chore: EC Pulse Patrol AI repairs" --body "Automated by EC Pulse Patrol AI. Safe mechanical repairs were applied and plugin/repository tests passed. This PR is intentionally not auto-merged. See the workflow run summary for findings."
+            exit 0
           fi
+
+          needs_report=false
+          if [ "$PATROL_STATUS" != "0" ] || [ "$tests_ok" != "true" ]; then
+            needs_report=true
+          fi
+          if [ "$needs_report" = "true" ]; then
+            existing=$(gh issue list --state open --search '"[Patrol AI] unresolved EC Pulse repository issue"' --json number --jq '.[0].number // empty')
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "```json
+$(cat patrol.json)
+```
+Plugin tests: $PLUGIN_TESTS
+Repository tests: $REPO_TESTS
+Patch hygiene: $HYGIENE"
+            else
+              gh issue create --title "[Patrol AI] unresolved EC Pulse repository issue" --body "```json
+$(cat patrol.json)
+```
+
+Plugin tests: $PLUGIN_TESTS
+Repository tests: $REPO_TESTS
+Patch hygiene: $HYGIENE"
+            fi
+            exit 1
+          fi
+
+          echo "No repair required."
