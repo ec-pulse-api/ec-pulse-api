@@ -212,9 +212,8 @@ async def customer_account(http_request: Request):
     if not user_id:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
     try:
+        from app.services.monitor_store import _init, _db_url
         with psycopg.connect(_db_url()) as conn:
-            from app.services.monitor_store import _init
-            from app.services.monitor_store import _db_url
             _init(conn)
             row = conn.execute(
                 "SELECT plan, credits_balance FROM api_accounts WHERE customer_user_id = %s",
