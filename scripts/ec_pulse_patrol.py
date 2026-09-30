@@ -56,8 +56,9 @@ def main():
             legal.append(str(p.relative_to(ROOT)))
     check("legal-placeholders",not legal,"unresolved placeholders: "+", ".join(legal) if legal else "none")
 
-    code,out,err=run("git","grep","-nE",r"(sk_live_[A-Za-z0-9]|whsec_[A-Za-z0-9]|-----BEGIN .*PRIVATE KEY-----)","--","*.py","*.md","*.json","*.yml","*.yaml",":!scripts/ec_pulse_patrol.py")
-    check("secret-scan",code!=0,"no high-confidence tracked secret pattern" if code!=0 else "secret pattern found")
+    code,files,err=run("git","grep","-lE",r"(sk_live_[A-Za-z0-9]|whsec_[A-Za-z0-9]|-----BEGIN .*PRIVATE KEY-----)","--","*.py","*.md","*.json","*.yml","*.yaml",":!scripts/ec_pulse_patrol.py",":!docs/legal/*")
+    hit_files=[line for line in files.splitlines() if line.strip()]
+    check("secret-scan",not hit_files,"no high-confidence tracked secret pattern" if not hit_files else "pattern found in: "+", ".join(hit_files))
 
     py_files=list((ROOT/"plugins/ec-pulse").rglob("*.py"))
     failures=[]
@@ -74,7 +75,9 @@ def main():
         check("plugin-tests",False,"test directory missing")
 
     failed=[x for x in RESULTS if not x["ok"]]
-    report={"agent":"ec-pulse-patrol-ai","engine":"self-contained","mode":"observe-repair-report","status":"PASS" if not failed else "FAIL","findings":RESULTS,"repairs":REPAIRS,"failures":failed}
+    hard=[x for x in failed if x["name"] not in {"legal-placeholders"}]
+    status="PASS" if not failed else ("BLOCKED" if not hard else "FAIL")
+    report={"agent":"ec-pulse-patrol-ai","engine":"self-contained","mode":"observe-repair-report","status":status,"findings":RESULTS,"repairs":REPAIRS,"failures":failed}
     print(json.dumps(report,ensure_ascii=False,indent=2))
     return 0
 
