@@ -198,7 +198,7 @@ async def billing_page(request: Request):
     user_id = user.get("id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Authenticated user id is missing")
-    return {"service": "EC Pulse API", "billing": "/v1/customer/account", "status": "authenticated", "user_id": user_id}
+    return {"service": "EC Pulse API", "billing": "/v1/customer/account", "status": "authenticated"}
 
 
 @app.get("/billing/success", include_in_schema=False)
@@ -227,8 +227,6 @@ async def billing_success(request: Request, session_id: str | None = Query(defau
             "plan": row[0],
             "credits_balance": row[1],
             "subscription_status": row[2],
-            "stripe_customer_id": row[3],
-            "stripe_subscription_id": row[4],
             "current_period_start": row[5].isoformat() if row[5] else None,
             "current_period_end": row[6].isoformat() if row[6] else None,
             "cancel_at_period_end": bool(row[7]),
