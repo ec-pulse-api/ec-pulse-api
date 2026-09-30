@@ -118,10 +118,18 @@ class SecurityTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, r"429.*Retry-After: 30"):
                 server._api_request("GET", "/v1/account")
 
+    def test_url_length_limit(self):
+        with self.assertRaises(ValueError):
+            server._validate_url("https://example.com/" + "a" * 2000)
+
     def test_base_url_rejects_credentials(self):
         with patch.dict(os.environ, {"EC_PULSE_API_BASE_URL": "https://user:pass@example.com"}, clear=True):
             with self.assertRaises(RuntimeError):
                 server._base_url()
+        for base in ("https://example.com/api", "https://example.com/?x=1", "https://example.com/#x"):
+            with patch.dict(os.environ, {"EC_PULSE_API_BASE_URL": base}, clear=True):
+                with self.assertRaises(RuntimeError):
+                    server._base_url()
 
     def test_signature(self):
         self.assertEqual(len(server._sign("secret","1700000000","POST","/v1/products/search",b"{}")),71)

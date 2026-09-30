@@ -39,13 +39,13 @@ TOOLS = [
         "limit": {"type": "integer", "minimum": 1, "maximum": 10},
     }, ["query"]),
     _tool("ec_product_get", "Retrieve normalized product data for one public product URL through EC Pulse.", {
-        "url": {"type": "string", "format": "uri", "minLength": 1}
+        "url": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 2000}
     }, ["url"]),
     _tool("ec_product_compare", "Compare normalized product data and observed prices for 2 to 20 public product URLs.", {
-        "urls": {"type": "array", "items": {"type": "string", "format": "uri"}, "minItems": 2, "maxItems": 20}
+        "urls": {"type": "array", "items": {"type": "string", "format": "uri", "maxLength": 2000}, "minItems": 2, "maxItems": 20}
     }, ["urls"]),
     _tool("ec_research_ingest", "Collect publicly accessible comments from supported URLs and return EC Pulse research analysis.", {
-        "urls": {"type": "array", "items": {"type": "string", "format": "uri"}, "minItems": 1, "maxItems": 20},
+        "urls": {"type": "array", "items": {"type": "string", "format": "uri", "maxLength": 2000}, "minItems": 1, "maxItems": 20},
         "max_comments_per_url": {"type": "integer", "minimum": 1, "maximum": 500}
     }, ["urls"]),
     _tool("ec_consumer_insights", "Analyze supplied customer comments with EC Pulse's rule-based pain-point and term extraction.", {
@@ -88,11 +88,17 @@ def _base_url() -> str:
         raise RuntimeError("EC_PULSE_API_BASE_URL must not contain URL credentials")
     if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
         raise RuntimeError("Non-local EC_PULSE_API_BASE_URL must use HTTPS")
+    if parsed.query or parsed.fragment:
+        raise RuntimeError("EC_PULSE_API_BASE_URL must not contain query or fragment")
+    if parsed.path not in {"", "/"}:
+        raise RuntimeError("EC_PULSE_API_BASE_URL must not contain an API path prefix")
     return value
 
 def _validate_url(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("URL must be a non-empty string")
+    if len(value) > 2000:
+        raise ValueError("URL must be at most 2000 characters")
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("URL must be an absolute http(s) URL")
