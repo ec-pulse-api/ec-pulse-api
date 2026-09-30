@@ -14,5 +14,6 @@
     "price-monitoring",
     "market-research",
     "commerce"
-  ]
+  ],
+  "mcpServers": "./.mcp.json"
 }
