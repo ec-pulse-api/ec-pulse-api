@@ -52,7 +52,7 @@ Do not submit until the following are truthful and complete:
 
 The legal documents still contain `［要入力］` placeholders and therefore must not be represented as final legal policies.
 
-Production smoke testing is also not marked PASS because no production `EC_PULSE_API_KEY` is available to the test runner. Unauthenticated production reachability has been verified separately (`/` 200, `/health` 200 with database `ok`, `/v1/account` 401 without a key).
+Production smoke testing is not marked PASS because no production `EC_PULSE_API_KEY` is available to the test runner. Unauthenticated production reachability has been verified separately (`/` 200, `/health` 200 with database `ok`, `/v1/account` 401 without a key).
 
 The current plugin HEAD `6b6265a706e9ea84c6376568c291def72637a7d5` has PASS GitHub Actions (plugin run `36786603230`, repository tests run `36786603194`). Vercel also passed for this current HEAD.
 
