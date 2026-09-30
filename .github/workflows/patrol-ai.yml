@@ -25,6 +25,8 @@ concurrency:
 jobs:
   patrol:
     runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -43,10 +45,21 @@ jobs:
             python -m unittest discover -s plugins/ec-pulse/tests -v
           } 2>&1 | tee patrol-deterministic.log
 
+      - name: Report missing Patrol AI credential
+        if: ${{ env.ANTHROPIC_API_KEY == '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Patrol AI report: ANTHROPIC_API_KEY is not configured" \
+            --body "The deterministic patrol checks ran, but the AI repair stage was skipped because the ANTHROPIC_API_KEY GitHub Actions secret is not available in this execution context. No production credentials or legal/business values were invented. Configure the repository Actions secret before expecting autonomous AI repair."
+          exit 1
+
       - name: Run Patrol AI
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic_api_key: ${{ env.ANTHROPIC_API_KEY }}
           prompt: |
             You are the EC Pulse Patrol AI for repository ${{ github.repository }}.
 
