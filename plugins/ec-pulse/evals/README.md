@@ -1,6 +1,6 @@
 # EC Pulse Plugin Evaluation
 
-Unexecuted cases must remain **NOT RUN**. The current execution environment cannot reach GitHub from a local shell, and no production API key is exposed to this audit.
+Unexecuted cases must remain **NOT RUN**. Production live cases remain unexecuted because no production API key is exposed to this audit.
 
 | Case | Status | Scope |
 |---|---|---|
@@ -11,7 +11,7 @@ Unexecuted cases must remain **NOT RUN**. The current execution environment cann
 | 5. Credit shortage | NOT RUN | Requires a test account with insufficient credits |
 | 6. Invalid/private URL | NOT RUN | Must verify production API rejects unsafe destinations |
 | 7. API authentication failure | NOT RUN | Requires a deliberately invalid live key |
-| 8. MCP protocol failure | NOT RUN | Unit tests were added, but the local runner was unavailable |
+| 8. MCP protocol failure | PASS | GitHub Actions plugin test suite passed on the latest audited commit |
 
 ## Automated test
 
@@ -23,7 +23,7 @@ It runs:
 python -m unittest discover -s plugins/ec-pulse/tests -v
 ```
 
-The workflow was committed, but its execution result was not available through the connected GitHub status interface during this audit. Therefore these cases are not marked PASS.
+The latest audited commit `7196be9ac7f7086a5385704fedc2fffbd0849b62` was verified through GitHub Actions: plugin test run `36732491028` completed successfully. The repository-wide test run `36732491058` also completed successfully.
 
 ## Live smoke test
 
