@@ -4,14 +4,6 @@ on:
   schedule:
     - cron: "17 0 * * *"
   workflow_dispatch:
-  push:
-    branches:
-      - "feat/patrol-ai-main"
-    paths:
-      - "plugins/ec-pulse/**"
-      - ".claude-plugin/**"
-      - ".github/workflows/**"
-      - "docs/**"
   pull_request:
     paths:
       - "plugins/ec-pulse/**"
