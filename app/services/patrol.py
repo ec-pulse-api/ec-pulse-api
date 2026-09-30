@@ -1,32 +1,55 @@
+import json
 import os
 from datetime import datetime, timezone
+
+import httpx
+import psycopg
+
 from app.services.product_search import search_products
-from app.services.monitor_store import run_due_monitors
+from app.services.monitor_store import run_due_monitors, _db_url
+
+
+def _store_report(report: dict) -> None:
+    with psycopg.connect(_db_url(), connect_timeout=3) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS patrol_reports (
+                id BIGSERIAL PRIMARY KEY,
+                checked_at TIMESTAMPTZ NOT NULL,
+                ok BOOLEAN NOT NULL,
+                report JSONB NOT NULL
+            )
+        """)
+        conn.execute(
+            "INSERT INTO patrol_reports (checked_at, ok, report) VALUES (%s, %s, %s)",
+            (report["checked_at"], report["ok"], json.dumps(report, ensure_ascii=False)),
+        )
+        conn.commit()
+
+
+async def _send_report(report: dict) -> None:
+    webhook = os.getenv("PATROL_REPORT_WEBHOOK_URL")
+    if not webhook:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=False) as client:
+            await client.post(webhook, json=report)
+    except Exception:
+        pass
 
 
 async def run_patrol() -> dict:
     checks = []
     repairs = []
-
-    # 1. Database / application health
     try:
-        import psycopg
-        from app.services.monitor_store import _db_url
         with psycopg.connect(_db_url(), connect_timeout=3) as conn:
             conn.execute("SELECT 1")
         checks.append({"name": "database", "ok": True})
     except Exception as exc:
         checks.append({"name": "database", "ok": False, "error": type(exc).__name__})
 
-    # 2. Product discovery smoke test with bounded self-repair.
-    # The patrol never charges a customer account because it calls the
-    # internal search service directly.
-    queries = [
-        "日焼け止め レディース",
-        "UVカット 日焼け対策",
-        "夏 レディース UV",
-    ]
+    queries = ["日焼け止め レディース", "UVカット 日焼け対策", "夏 レディース UV", "日焼け対策 グッズ レディース", "UVカット アームカバー"]
     search_result = None
+    errors = []
     for index, query in enumerate(queries):
         try:
             result = await search_products(query, ["amazon", "rakuten", "yahoo"], 3)
@@ -35,29 +58,14 @@ async def run_patrol() -> dict:
                 search_result = {"query": query, "count": len(items)}
                 checks.append({"name": "product-search", "ok": True, **search_result})
                 if index > 0:
-                    repairs.append({
-                        "type": "search-query-fallback",
-                        "action": "alternate_query",
-                        "query": query,
-                        "reason": "primary smoke-test query returned no products",
-                    })
+                    repairs.append({"type": "search-query-fallback", "action": "alternate_query", "query": query})
                 break
         except Exception as exc:
-            if index == len(queries) - 1:
-                checks.append({"name": "product-search", "ok": False, "error": type(exc).__name__})
-    if search_result is None and not any(x["name"] == "product-search" for x in checks):
-        checks.append({
-            "name": "product-search",
-            "ok": False,
-            "error": "all smoke-test queries returned zero products",
-        })
-        repairs.append({
-            "type": "search-degraded",
-            "action": "escalate",
-            "reason": "all bounded fallback queries returned zero products",
-        })
+            errors.append(type(exc).__name__)
+    if search_result is None:
+        checks.append({"name": "product-search", "ok": False, "error": "all smoke-test queries returned zero products", "exceptions": errors[-3:]})
+        repairs.append({"type": "search-degraded", "action": "escalate", "reason": "all bounded fallback queries returned zero products"})
 
-    # 3. Monitor subsystem. Retry once as a bounded repair if the first pass fails.
     try:
         monitor_result = await run_due_monitors()
         checks.append({"name": "monitors", "ok": True, "result": monitor_result})
@@ -68,14 +76,10 @@ async def run_patrol() -> dict:
             repairs.append({"type": "monitor-retry", "action": "retry_once", "result": retry_result})
             checks.append({"name": "monitors-retry", "ok": True, "result": retry_result})
         except Exception as retry_exc:
-            repairs.append({
-                "type": "monitor-failure",
-                "action": "escalate",
-                "error": type(retry_exc).__name__,
-            })
+            repairs.append({"type": "monitor-failure", "action": "escalate", "error": type(retry_exc).__name__})
 
     failures = [item for item in checks if item.get("ok") is False]
-    return {
+    report = {
         "ok": not failures,
         "agent": "patrol-ai",
         "mode": "observe-repair-report",
@@ -83,9 +87,11 @@ async def run_patrol() -> dict:
         "checks": checks,
         "repairs": repairs,
         "failures": failures,
-        "summary": (
-            "巡回正常。修復不要。"
-            if not failures and not repairs
-            else "巡回完了。自己修復を実施または要監視状態を報告。"
-        ),
+        "summary": "巡回正常。修復不要。" if not failures and not repairs else "巡回完了。自己修復を実施または要監視状態を報告。",
     }
+    try:
+        _store_report(report)
+    except Exception as exc:
+        report["repairs"].append({"type": "report-persistence-failure", "action": "escalate", "error": type(exc).__name__})
+    await _send_report(report)
+    return report
