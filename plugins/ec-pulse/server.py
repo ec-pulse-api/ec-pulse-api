@@ -73,7 +73,7 @@ TOOLS = [
     }),
     _tool("ec_research_opportunity", "Read the opportunity analysis for one authenticated EC Pulse research run.", {
         "run_id": {"type": "string", "minLength": 1, "maxLength": 100}
-    }),
+    }, ["run_id"]),
 ]
 
 TOOL_MAP = {t["name"]: t for t in TOOLS}
@@ -169,6 +169,11 @@ def _validate_args(name: str, args: Any) -> dict[str, Any]:
                 raise ValueError("run_id must be a valid UUID") from exc
         elif not isinstance(monitor_id, str) or not 1 <= len(monitor_id) <= 200:
             raise ValueError("monitor_id must be 1-200 characters")
+        else:
+            try:
+                uuid.UUID(monitor_id)
+            except ValueError as exc:
+                raise ValueError("monitor_id must be a valid UUID") from exc
         if "limit" in args:
             limit = args["limit"]
             minimum = 2 if name == "ec_monitor_opportunity" else 1
@@ -222,7 +227,17 @@ def _api_request(method: str, path: str, *, body: dict[str, Any] | None = None, 
             suffix = f"; Retry-After: {retry_after}" if retry_after else ""
             raise RuntimeError(f"EC Pulse rate limit exceeded (429){suffix}") from exc
         if 400 <= exc.code < 500:
-            raise RuntimeError(f"EC Pulse request was rejected ({exc.code})") from exc
+            safe_detail = None
+            try:
+                raw = exc.read(65536).decode("utf-8", errors="replace")
+                parsed = json.loads(raw)
+                detail = parsed.get("detail") if isinstance(parsed, dict) else None
+                if isinstance(detail, str) and detail.startswith(("Invalid public URL:", "Invalid monitor or webhook URL:")):
+                    safe_detail = detail[:500]
+            except Exception:
+                pass
+            suffix = f": {safe_detail}" if safe_detail else ""
+            raise RuntimeError(f"EC Pulse request was rejected ({exc.code}){suffix}") from exc
         raise RuntimeError(f"EC Pulse upstream service error ({exc.code})") from exc
     except URLError as exc:
         if isinstance(exc.reason, TimeoutError):
