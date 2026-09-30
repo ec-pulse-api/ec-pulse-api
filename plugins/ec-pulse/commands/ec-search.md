@@ -1,4 +1,6 @@
 ---
+name: ec-search
+description: Search Japanese e-commerce marketplaces with EC Pulse
 description: Search Japanese e-commerce marketplaces with EC Pulse
 ---
 
