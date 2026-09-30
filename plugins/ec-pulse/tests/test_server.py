@@ -23,6 +23,10 @@ class MCPProtocolTests(unittest.TestCase):
     def test_notification_semantics(self):
         self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"notifications/initialized","params":{}}))
         self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"notifications/cancelled","params":{}}))
+        self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"initialize","params":{}}))
+        self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"tools/list","params":{}}))
+        with patch.object(server, "_call_tool", return_value={"ok": True}):
+            self.assertIsNone(server._handle({"jsonrpc":"2.0","method":"tools/call","params":{"name":"ec_account","arguments":{}}}))
 
     def test_ping(self):
         self.assertEqual(server._handle({"jsonrpc":"2.0","id":8,"method":"ping","params":{}}), {"jsonrpc":"2.0","id":8,"result":{}})
