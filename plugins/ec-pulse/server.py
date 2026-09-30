@@ -261,8 +261,12 @@ def _handle(message: Any) -> dict[str, Any] | None:
     if method == "ping":
         return None if request_id is None else {"jsonrpc": "2.0", "id": request_id, "result": {}}
     if method == "initialize":
+        if request_id is None:
+            return None
         return {"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "ec-pulse", "version": "0.1.0"}}}
     if method == "tools/list":
+        if request_id is None:
+            return None
         return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}}
     if method == "tools/call":
         params = message.get("params")
@@ -273,10 +277,16 @@ def _handle(message: Any) -> dict[str, Any] | None:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Unknown tool"}}
         try:
             value = _call_tool(name, params.get("arguments") or {})
+            if request_id is None:
+                return None
             return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False, separators=(",", ":"))}], "isError": False}}
         except (ValueError, RuntimeError) as exc:
+            if request_id is None:
+                return None
             return {"jsonrpc": "2.0", "id": request_id, "result": _tool_error(str(exc))}
         except Exception as exc:
+            if request_id is None:
+                return None
             return {"jsonrpc": "2.0", "id": request_id, "result": _tool_error(f"Unexpected plugin error: {type(exc).__name__}")}
     if method is None:
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": "Invalid Request"}}
