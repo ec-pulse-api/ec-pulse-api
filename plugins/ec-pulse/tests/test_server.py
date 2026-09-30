@@ -122,6 +122,14 @@ class SecurityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             server._validate_url("https://example.com/" + "a" * 2000)
 
+    def test_schema_url_and_id_limits(self):
+        by_name = {tool["name"]: tool for tool in server.TOOLS}
+        monitor = by_name["ec_monitor_create"]["inputSchema"]["properties"]
+        self.assertEqual(monitor["url"]["maxLength"], 2000)
+        self.assertEqual(monitor["webhook_url"]["maxLength"], 2000)
+        for name in ("ec_monitor_history", "ec_monitor_opportunity"):
+            self.assertEqual(by_name[name]["inputSchema"]["properties"]["monitor_id"]["maxLength"], 200)
+
     def test_base_url_rejects_credentials(self):
         with patch.dict(os.environ, {"EC_PULSE_API_BASE_URL": "https://user:pass@example.com"}, clear=True):
             with self.assertRaises(RuntimeError):
