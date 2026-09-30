@@ -144,7 +144,7 @@ def main() -> int:
 
     failures = [f for f in findings if f["status"] == "FAIL"]
     blocked = [f for f in findings if f["status"] == "BLOCKED"]
-    status = "PASS" if not failures else "FAIL"
+    status = "FAIL" if failures else ("BLOCKED" if blocked else "PASS")
     report = {
         "agent": "ec-pulse-patrol-ai",
         "mode": "observe-repair-report",
@@ -155,7 +155,7 @@ def main() -> int:
         "findings": findings,
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 1 if failures else 0
+    return 1 if failures else (2 if blocked else 0)
 
 
 if __name__ == "__main__":
