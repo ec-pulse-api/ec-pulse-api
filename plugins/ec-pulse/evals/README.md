@@ -23,7 +23,7 @@ It runs:
 python -m unittest discover -s plugins/ec-pulse/tests -v
 ```
 
-The current audited commit `c9f7c54d96c5fcae785f9e8d0031992f80985e8d` was verified through GitHub Actions: plugin test run `36733563325` completed successfully. The repository-wide test run `36733563889` also completed successfully. The current-head Vercel status is NOT VERIFIED.
+The current audited commit `50159461c32f2b51305cbf40cc8c2d5c2f087895` was verified through GitHub Actions: plugin test run `36759566107` completed successfully. The repository-wide test run `36759566085` also completed successfully. The Vercel status for the current head is SUCCESS (`Deployment has completed`). The feature branch is 2 commits behind `main` and the open PR is currently reported as not mergeable; reconcile that before merging.
 
 ## Live smoke test
 
