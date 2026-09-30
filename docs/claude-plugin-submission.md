@@ -54,7 +54,7 @@ The legal documents still contain `［要入力］` placeholders and therefore m
 
 Production smoke testing is also not marked PASS because no production `EC_PULSE_API_KEY` is available to the test runner. Unauthenticated production reachability has been verified separately (`/` 200, `/health` 200 with database `ok`, `/v1/account` 401 without a key).
 
-The audited plugin commit `50159461c32f2b51305cbf40cc8c2d5c2f087895` has PASS GitHub Actions (plugin run `36759566107`, repository tests run `36759566085`). Vercel passed for that audited commit. A subsequent documentation-only HEAD is currently being deployed by Vercel and is not yet verified.
+The current plugin HEAD `6b6265a706e9ea84c6376568c291def72637a7d5` has PASS GitHub Actions (plugin run `36786603230`, repository tests run `36786603194`). Vercel also passed for this current HEAD.
 
 ## Evaluation status
 
@@ -67,4 +67,3 @@ The audited plugin commit `50159461c32f2b51305cbf40cc8c2d5c2f087895` has PASS Gi
 - API authentication failure: NOT RUN against production
 - MCP protocol/security: PASS on audited plugin commit `50159461c32f2b51305cbf40cc8c2d5c2f087895` (GitHub Actions run `36759566107`)
 - Repository-wide tests: PASS on audited plugin commit `50159461c32f2b51305cbf40cc8c2d5c2f087895` (GitHub Actions run `36759566085`)
-- a case PASS without an actual recorded run.
