@@ -1,4 +1,5 @@
 name: EC Pulse Patrol AI
+# Autonomous security/reliability patrol: scheduled + PR-triggered, with safe repair/reporting.
 
 on:
   schedule:
