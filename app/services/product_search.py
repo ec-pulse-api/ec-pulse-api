@@ -924,13 +924,45 @@ async def search_products(query: str, marketplaces: list[str], limit: int) -> di
                 return_exceptions=True,
             )
             for item, product_result in zip(discovered, normalized):
-                if isinstance(product_result, Exception):
+                if not isinstance(product_result, Exception):
+                    payload, cache_hit = product_result
+                    flat.append({
+                        "url": item["url"],
+                        "cache_hit": cache_hit,
+                        "product": payload,
+                    })
                     continue
-                payload, cache_hit = product_result
+
+                # Discovery is still a usable catalog candidate even when the
+                # destination page blocks our detailed product parser.
                 flat.append({
                     "url": item["url"],
-                    "cache_hit": cache_hit,
-                    "product": payload,
+                    "cache_hit": False,
+                    "product": {
+                        "product": {
+                            "title": item.get("title") or "商品候補",
+                            "brand": None,
+                            "model": None,
+                            "sku": None,
+                            "gtin": None,
+                            "product_id": None,
+                        },
+                        "pricing": {
+                            "price": None,
+                            "list_price": None,
+                            "currency": "JPY",
+                        },
+                        "availability": {"status": "Unknown"},
+                        "rating": {"score": None, "count": 0},
+                        "seller": {"name": None},
+                        "source": {
+                            "site": item.get("marketplace") or "marketplace",
+                            "marketplace": item.get("marketplace"),
+                            "product_id": None,
+                            "url": item["url"],
+                            "image": None,
+                        },
+                    },
                 })
     priced = [
         item for item in flat
