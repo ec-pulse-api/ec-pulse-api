@@ -53,13 +53,13 @@ TOOLS = [
         "source": {"type": "string", "maxLength": 50}
     }, ["comments"]),
     _tool("ec_monitor_create", "Create a price monitor. This changes persistent account state and requires explicit user intent.", {
-        "url": {"type": "string", "format": "uri"},
+        "url": {"type": "string", "format": "uri", "maxLength": 2000},
         "interval_minutes": {"type": "integer", "minimum": 5, "maximum": 10080},
-        "webhook_url": {"type": "string", "format": "uri"}
+        "webhook_url": {"type": "string", "format": "uri", "maxLength": 2000}
     }, ["url", "webhook_url"], read_only=False, destructive=False),
     _tool("ec_monitor_list", "List price monitors owned by the authenticated EC Pulse account.", {}),
     _tool("ec_monitor_history", "Read price history for one monitor owned by the authenticated EC Pulse account.", {
-        "monitor_id": {"type": "string", "format": "uuid"},
+        "monitor_id": {"type": "string", "format": "uuid", "maxLength": 200}
         "limit": {"type": "integer", "minimum": 1, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_monitor_opportunity", "Analyze price movement for one owned monitor and return the EC Pulse opportunity signal.", {
