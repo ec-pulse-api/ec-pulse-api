@@ -37,13 +37,18 @@ jobs:
           curl --fail-with-body --silent --show-error --max-time 30 "${BACKEND_URL%/}/health"
 
       - name: Run production AI patrol
-        if: ${{ env.CRON_SECRET != '' }}
         env:
           BACKEND_URL: ${{ secrets.EC_PULSE_API_URL || 'https://ec-pulse-one.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
-          response=$(curl --fail-with-body --silent --show-error --max-time 120             -H "Authorization: Bearer ${CRON_SECRET}"             "${BACKEND_URL%/}/api/cron/patrol")
+          if [ -z "${CRON_SECRET}" ]; then
+            echo "CRON_SECRET is not configured in GitHub Actions." >&2
+            exit 1
+          fi
+          response=$(curl --fail-with-body --silent --show-error --max-time 120 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${BACKEND_URL%/}/api/cron/patrol")
           echo "${response}" > runtime-patrol-report.json
           python -c 'import json; x=json.load(open("runtime-patrol-report.json", encoding="utf-8")); print("runtime patrol ok:", x.get("ok")); print("repairs:", x.get("repairs", [])); print("failures:", x.get("failures", [])); raise SystemExit(0 if x.get("ok") else 1)'
 
