@@ -20,7 +20,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
-DEFAULT_BASE_URL = "https://ec-pulse-api.vercel.app"
+DEFAULT_BASE_URL = "https://ec-pulse-api-coral.vercel.app"
 TIMEOUT_SECONDS = 20
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
