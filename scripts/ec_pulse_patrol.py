@@ -39,7 +39,7 @@ def main():
     if server.exists():
         s=server.read_text()
         tools=re.findall(r'^\s*_tool\("([^"]+)"',s,re.M)
-        check("mcp-tools",len(tools)==12 and len(set(tools))==12,f"{len(tools)} unique MCP tools")
+        check("mcp-tools",len(tools)==10 and len(set(tools))==10,f"{len(tools)} unique MCP tools")
         check("api-key-source","EC_PULSE_API_KEY" in s and "print(" not in s,"API key is environment-sourced without print")
         check("url-safety","getaddrinfo" in s and "is_private" in s,"DNS/private destination checks present")
     else:
