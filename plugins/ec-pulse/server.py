@@ -160,6 +160,9 @@ def _validate_args(name: str, args: Any) -> dict[str, Any]:
     elif name == "ec_research_runs":
         if "url" in args and args["url"] is not None:
             _validate_url(args["url"])
+        limit = args.get("limit", 20)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
     elif name == "ec_research_opportunity":
         run_id = args.get("run_id")
         if not isinstance(run_id, str) or not 1 <= len(run_id) <= 200:
