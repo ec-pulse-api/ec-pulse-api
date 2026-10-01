@@ -12,6 +12,7 @@ import hmac
 import ipaddress
 import json
 import os
+import socket
 import sys
 import time
 from typing import Any
@@ -66,6 +67,12 @@ TOOLS = [
         "limit": {"type": "integer", "minimum": 2, "maximum": 1000}
     }, ["monitor_id"]),
     _tool("ec_account", "Return the authenticated account plan, remaining credits, and usage summary. The raw API key is never returned.", {}),
+    _tool("ec_research_runs", "List stored EC Pulse research runs for the authenticated account.", {
+        "url": {"type": "string", "format": "uri", "minLength": 1}
+    }),
+    _tool("ec_research_opportunity", "Analyze one stored research run and return product opportunity candidates.", {
+        "run_id": {"type": "string", "minLength": 1, "maxLength": 200}
+    }, ["run_id"]),
 ]
 
 TOOL_MAP = {t["name"]: t for t in TOOLS}
@@ -149,6 +156,13 @@ def _validate_args(name: str, args: Any) -> dict[str, Any]:
         interval = args.get("interval_minutes", 60)
         if isinstance(interval, bool) or not isinstance(interval, int) or not 5 <= interval <= 10080:
             raise ValueError("interval_minutes must be between 5 and 10080")
+    elif name == "ec_research_runs":
+        if "url" in args and args["url"] is not None:
+            _validate_url(args["url"])
+    elif name == "ec_research_opportunity":
+        run_id = args.get("run_id")
+        if not isinstance(run_id, str) or not 1 <= len(run_id) <= 200:
+            raise ValueError("run_id must be 1-200 characters")
     elif name in {"ec_monitor_history", "ec_monitor_opportunity"}:
         monitor_id = args.get("monitor_id")
         if not isinstance(monitor_id, str) or not 1 <= len(monitor_id) <= 200:
@@ -165,6 +179,16 @@ def _sign(key: str, timestamp: str, method: str, path: str, body: bytes) -> str:
     payload = f"{timestamp}.{method.upper()}.{path}.{digest}".encode()
     return "sha256=" + hmac.new(key.encode(), payload, hashlib.sha256).hexdigest()
 
+def _assert_public_destination(host: str) -> None:
+    try:
+        addresses = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise RuntimeError("EC Pulse upstream hostname could not be resolved") from exc
+    for item in addresses:
+        address = ipaddress.ip_address(item[4][0])
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast or address.is_reserved:
+            raise RuntimeError("EC Pulse upstream resolved to a local/private destination")
+
 def _api_request(method: str, path: str, *, body: dict[str, Any] | None = None, query: dict[str, Any] | None = None) -> Any:
     key = _api_key()
     url = _base_url() + path
@@ -178,6 +202,7 @@ def _api_request(method: str, path: str, *, body: dict[str, Any] | None = None, 
         timestamp = str(int(time.time()))
         headers["X-EC-Timestamp"] = timestamp
         headers["X-EC-Signature"] = _sign(key, timestamp, method, path, payload)
+    _assert_public_destination(urlparse(url).hostname or "")
     req = Request(url, data=payload if method != "GET" else None, headers=headers, method=method)
     try:
         with urlopen(req, timeout=TIMEOUT_SECONDS) as response:
@@ -228,6 +253,11 @@ def _call_tool(name: str, args: Any) -> Any:
         return _api_request("GET", f"/v1/monitors/{quote(args['monitor_id'], safe='')}/opportunity", query={"limit": args.get("limit", 100)})
     if name == "ec_account":
         return _api_request("GET", "/v1/account")
+    if name == "ec_research_runs":
+        return _api_request("GET", "/v1/research/runs", query={"url": args.get("url"), "limit": args.get("limit", 20)})
+    if name == "ec_research_opportunity":
+        run_id = quote(args["run_id"], safe="")
+        return _api_request("GET", f"/v1/research/runs/{run_id}/opportunity")
     raise ValueError("Unknown tool")
 
 def _tool_error(message: str) -> dict[str, Any]:
