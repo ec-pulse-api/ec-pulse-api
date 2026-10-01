@@ -23,16 +23,36 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run autonomous patrol and repair
+      - name: Run repository patrol
         run: |
           set -euo pipefail
           python scripts/ec_pulse_patrol.py | tee patrol-report.json
-          python -c 'import json; x=json.load(open("patrol-report.json", encoding="utf-8")); print("patrol status:", x.get("status")); print("repairs:", x.get("repairs", [])); print("failures:", x.get("failures", [])); raise SystemExit(1 if x.get("status") == "FAIL" else 0)'
+          python -c 'import json; x=json.load(open("patrol-report.json", encoding="utf-8")); print("repository patrol status:", x.get("status")); print("repairs:", x.get("repairs", [])); print("failures:", x.get("failures", [])); raise SystemExit(1 if x.get("status") == "FAIL" else 0)'
 
-      - name: Upload patrol report
+      - name: Check production health
+        env:
+          BACKEND_URL: ${{ secrets.EC_PULSE_API_URL || 'https://ec-pulse-one.vercel.app' }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --max-time 30 "${BACKEND_URL%/}/health"
+
+      - name: Run production AI patrol
+        if: ${{ env.CRON_SECRET != '' }}
+        env:
+          BACKEND_URL: ${{ secrets.EC_PULSE_API_URL || 'https://ec-pulse-one.vercel.app' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          response=$(curl --fail-with-body --silent --show-error --max-time 120             -H "Authorization: Bearer ${CRON_SECRET}"             "${BACKEND_URL%/}/api/cron/patrol")
+          echo "${response}" > runtime-patrol-report.json
+          python -c 'import json; x=json.load(open("runtime-patrol-report.json", encoding="utf-8")); print("runtime patrol ok:", x.get("ok")); print("repairs:", x.get("repairs", [])); print("failures:", x.get("failures", [])); raise SystemExit(0 if x.get("ok") else 1)'
+
+      - name: Upload patrol reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ec-pulse-patrol-report
-          path: patrol-report.json
+          path: |
+            patrol-report.json
+            runtime-patrol-report.json
           if-no-files-found: ignore
