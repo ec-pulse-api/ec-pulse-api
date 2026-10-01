@@ -1,0 +1,9 @@
+{
+  "name": "ec-pulse-marketplace",
+  "plugins": [
+    {
+      "name": "ec-pulse",
+      "source": "./plugins/ec-pulse"
+    }
+  ]
+}
