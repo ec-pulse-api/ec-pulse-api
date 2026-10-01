@@ -12,13 +12,14 @@ jobs:
     steps:
       - name: Run autonomous patrol
         env:
-          BACKEND_URL: ${{ secrets.EC_PULSE_API_URL || 'https://ec-pulse-rk8mola3m-naitoshyuichirou-6935.vercel.app' }}
+          BACKEND_URL: ${{ secrets.EC_PULSE_API_URL || 'https://ec-pulse-api.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
-          test -n "$CRON_SECRET"
-          response=$(curl --fail-with-body --silent --show-error --max-time 120 \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            "$BACKEND_URL/api/cron/patrol")
-          echo "$response"
-          python -c 'import json,sys; x=json.loads(sys.stdin.read()); raise SystemExit(0 if x.get("ok") else 1)' <<< "$response"
+          if [ -z "${CRON_SECRET}" ]; then
+            echo "CRON_SECRET is not configured in GitHub Actions." >&2
+            exit 1
+          fi
+          response=$(curl --fail-with-body --silent --show-error --max-time 120             -H "Authorization: Bearer ${CRON_SECRET}"             "${BACKEND_URL%/}/api/cron/patrol")
+          echo "${response}"
+          python -c 'import json,sys; x=json.loads(sys.stdin.read()); raise SystemExit(0 if x.get("ok") else 1)' <<< "${response}"
