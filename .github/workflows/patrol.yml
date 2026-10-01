@@ -38,7 +38,7 @@ jobs:
 
       - name: Run production AI patrol
         env:
-          BACKEND_URL: ${{ secrets.EC_PULSE_API_URL || 'https://ec-pulse-one.vercel.app' }}
+          BACKEND_URL: ${{ secrets.EC_PULSE_API_URL || 'https://ec-pulse-api-coral.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
