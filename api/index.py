@@ -6,3 +6,4 @@ register_key_routes(app)
 register_research_batch_routes(app)
 
 # Keep the production Git integration deployment path active.
+# Patrol/runtime changes must deploy from the canonical main branch.
