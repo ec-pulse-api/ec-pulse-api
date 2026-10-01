@@ -43,8 +43,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${CRON_SECRET}" ]; then
-            echo "CRON_SECRET is not configured in GitHub Actions." >&2
-            exit 1
+            echo "CRON_SECRET is not configured in GitHub Actions; production AI patrol was not executed."
+            echo '{"ok":false,"status":"SKIPPED","reason":"CRON_SECRET is not configured in GitHub Actions"}' > runtime-patrol-report.json
+            exit 0
+          fi
           fi
           response=$(curl --fail-with-body --silent --show-error --max-time 120 \
             -H "Authorization: Bearer ${CRON_SECRET}" \
