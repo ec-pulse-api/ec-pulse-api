@@ -17,8 +17,11 @@ class MCPProtocolTests(unittest.TestCase):
         self.assertEqual(r["result"]["serverInfo"]["name"],"ec-pulse")
     def test_tools_list(self):
         r=server._handle({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
-        self.assertEqual(len(r["result"]["tools"]),10)
-        self.assertIn("ec_product_search",{x["name"] for x in r["result"]["tools"]})
+        self.assertEqual(len(r["result"]["tools"]),12)
+        names={x["name"] for x in r["result"]["tools"]}
+        self.assertIn("ec_product_search",names)
+        self.assertIn("ec_research_runs",names)
+        self.assertIn("ec_research_opportunity",names)
     def test_unknown_method(self):
         r=server._handle({"jsonrpc":"2.0","id":3,"method":"nope","params":{}})
         self.assertEqual(r["error"]["code"],-32601)
@@ -29,7 +32,7 @@ class MCPProtocolTests(unittest.TestCase):
         r=server._handle({"jsonrpc":"1.0","id":5,"method":"initialize"})
         self.assertEqual(r["error"]["code"],-32600)
     def test_parse_error(self):
-        with patch("sys.stdin",iter(["{broken\\n"])),patch("sys.stdout") as out:
+        with patch("sys.stdin",iter(["{broken\n"])),patch("sys.stdout") as out:
             server.main()
             emitted=out.write.call_args.args[0]
         self.assertEqual(json.loads(emitted)["error"]["code"],-32700)
@@ -40,22 +43,18 @@ class ValidationTests(unittest.TestCase):
     def test_invalid_url(self):
         with self.assertRaises(ValueError): server._validate_url("not-a-url")
     def test_local_and_private_urls_rejected(self):
-        for url in [
-            "http://localhost:8080/x",
-            "http://127.0.0.1:8080/x",
-            "http://10.0.0.1/x",
-            "http://172.16.0.1/x",
-            "http://192.168.1.1/x",
-            "http://169.254.169.254/latest/meta-data/",
-            "http://[::1]/x",
-            "http://[fc00::1]/x",
-        ]:
-            with self.assertRaises(ValueError, msg=url):
-                server._validate_url(url)
+        for url in ["http://localhost:8080/x","http://127.0.0.1:8080/x","http://10.0.0.1/x","http://172.16.0.1/x","http://192.168.1.1/x","http://169.254.169.254/latest/meta-data/","http://[::1]/x","http://[fc00::1]/x"]:
+            with self.assertRaises(ValueError,msg=url): server._validate_url(url)
+    def test_dns_resolved_private_url_rejected(self):
+        fake=[(2,1,6,"",("10.0.0.7",443))]
+        with patch.object(server.socket,"getaddrinfo",return_value=fake):
+            with self.assertRaises(ValueError): server._validate_url("https://public.example/x")
     def test_compare_minimum(self):
         with self.assertRaises(ValueError): server._validate_args("ec_product_compare",{"urls":["https://example.com"]})
     def test_unknown_argument(self):
         with self.assertRaises(ValueError): server._validate_args("ec_account",{"api_key":"secret"})
+    def test_research_opportunity_uuid(self):
+        with self.assertRaises(ValueError): server._validate_args("ec_research_opportunity",{"run_id":"abc"})
 
 class SecurityTests(unittest.TestCase):
     def test_key_missing(self):
