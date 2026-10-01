@@ -17,7 +17,7 @@ class MCPProtocolTests(unittest.TestCase):
         self.assertEqual(r["result"]["serverInfo"]["name"],"ec-pulse")
     def test_tools_list(self):
         r=server._handle({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
-        self.assertEqual(len(r["result"]["tools"]),10)
+        self.assertEqual(len(r["result"]["tools"]),12)
         self.assertIn("ec_product_search",{x["name"] for x in r["result"]["tools"]})
     def test_unknown_method(self):
         r=server._handle({"jsonrpc":"2.0","id":3,"method":"nope","params":{}})
@@ -52,6 +52,8 @@ class ValidationTests(unittest.TestCase):
         ]:
             with self.assertRaises(ValueError, msg=url):
                 server._validate_url(url)
+    def test_research_opportunity_run_id_validation(self):
+        with self.assertRaises(ValueError): server._validate_args("ec_research_opportunity", {"run_id": ""})
     def test_compare_minimum(self):
         with self.assertRaises(ValueError): server._validate_args("ec_product_compare",{"urls":["https://example.com"]})
     def test_unknown_argument(self):
