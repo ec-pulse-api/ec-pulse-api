@@ -12,6 +12,7 @@ import hmac
 import ipaddress
 import json
 import os
+import socket
 import sys
 import time
 from typing import Any
@@ -104,6 +105,15 @@ def _validate_url(value: Any) -> str:
         address = None
     if address is not None and (address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast or address.is_reserved):
         raise ValueError("Local/private destinations are not allowed")
+    try:
+        resolved = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError("URL host could not be resolved safely") from exc
+    for _, _, _, _, sockaddr in resolved:
+        resolved_address = ipaddress.ip_address(sockaddr[0])
+        if (resolved_address.is_private or resolved_address.is_loopback or resolved_address.is_link_local or
+                resolved_address.is_unspecified or resolved_address.is_multicast or resolved_address.is_reserved):
+            raise ValueError("URL resolves to a local/private destination")
     return value
 
 def _validate_args(name: str, args: Any) -> dict[str, Any]:
