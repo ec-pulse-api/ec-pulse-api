@@ -68,7 +68,8 @@ TOOLS = [
     }, ["monitor_id"]),
     _tool("ec_account", "Return the authenticated account plan, remaining credits, and usage summary. The raw API key is never returned.", {}),
     _tool("ec_research_runs", "List stored EC Pulse research runs for the authenticated account.", {
-        "url": {"type": "string", "format": "uri", "minLength": 1}
+        "url": {"type": "string", "format": "uri", "minLength": 1},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100}
     }),
     _tool("ec_research_opportunity", "Analyze one stored research run and return product opportunity candidates.", {
         "run_id": {"type": "string", "minLength": 1, "maxLength": 200}
