@@ -34,7 +34,17 @@ jobs:
           BACKEND_URL: ${{ secrets.EC_PULSE_API_URL || 'https://ec-pulse-one.vercel.app' }}
         run: |
           set -euo pipefail
-          curl --fail-with-body --silent --show-error --max-time 30 "${BACKEND_URL%/}/health"
+          for attempt in 1 2 3 4 5; do
+            if curl --fail-with-body --silent --show-error --max-time 30 "${BACKEND_URL%/}/health"; then
+              exit 0
+            fi
+            if [ "${attempt}" -lt 5 ]; then
+              echo "health check failed (attempt ${attempt}/5); retrying..." >&2
+              sleep 5
+            fi
+          done
+          echo "production health check failed after 5 attempts" >&2
+          exit 1
 
       - name: Run production AI patrol
         env:
