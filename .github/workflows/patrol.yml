@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/ec_pulse_patrol.py'
+      - '.github/workflows/patrol.yml'
 
 jobs:
   patrol:
