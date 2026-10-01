@@ -52,6 +52,12 @@ class RouteMappingTests(unittest.TestCase):
     def test_monitor_opportunity_mapping(self):
         self.assert_call("ec_monitor_opportunity", {"monitor_id": "abc", "limit": 20}, "GET", "/v1/monitors/abc/opportunity", expected_query={"limit": 20})
 
+    def test_research_runs_mapping(self):
+        self.assert_call("ec_research_runs", {"url": "https://example.com", "limit": 10}, "GET", "/v1/research/runs", expected_query={"url": "https://example.com", "limit": 10})
+
+    def test_research_opportunity_mapping_and_encoding(self):
+        self.assert_call("ec_research_opportunity", {"run_id": "run/with spaces"}, "GET", "/v1/research/runs/run%2Fwith%20spaces/opportunity")
+
     def test_account_mapping(self):
         self.assert_call("ec_account", {}, "GET", "/v1/account")
 
