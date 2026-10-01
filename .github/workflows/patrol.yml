@@ -27,17 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/ec_pulse_patrol.py | tee patrol-report.json
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          report = json.loads(Path("patrol-report.json").read_text(encoding="utf-8"))
-          status = report.get("status")
-          print("patrol status:", status)
-          print("repairs:", report.get("repairs", []))
-          print("failures:", report.get("failures", []))
-          if status == "FAIL":
-              raise SystemExit(1)
-          PY
+          python -c 'import json; x=json.load(open("patrol-report.json", encoding="utf-8")); print("patrol status:", x.get("status")); print("repairs:", x.get("repairs", [])); print("failures:", x.get("failures", [])); raise SystemExit(1 if x.get("status") == "FAIL" else 0)'
 
       - name: Upload patrol report
         if: always()
