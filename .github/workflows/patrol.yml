@@ -10,16 +10,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Run autonomous patrol
         env:
           BACKEND_URL: ${{ secrets.EC_PULSE_API_URL || 'https://ec-pulse-one.vercel.app' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
-          if [ -z "${CRON_SECRET}" ]; then
-            echo "CRON_SECRET is not configured in GitHub Actions." >&2
-            exit 1
+          if [ -n "${CRON_SECRET}" ]; then
+            response=$(curl --fail-with-body --silent --show-error --max-time 120 \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              "${BACKEND_URL%/}/api/cron/patrol")
+            echo "${response}"
+            python -c 'import json,sys; x=json.loads(sys.stdin.read()); raise SystemExit(0 if x.get("ok") else 1)' <<< "${response}"
+          else
+            echo "CRON_SECRET unavailable; running self-contained repository patrol."
+            python scripts/ec_pulse_patrol.py | tee patrol-report.json
+            python - <<'PY'
+import json
+from pathlib import Path
+x=json.loads(Path("patrol-report.json").read_text())
+if x.get("status") == "FAIL":
+    raise SystemExit(1)
+print("self-contained patrol status:", x.get("status"))
+print("repairs:", x.get("repairs"))
+print("failures:", x.get("failures"))
+PY
           fi
-          response=$(curl --fail-with-body --silent --show-error --max-time 120             -H "Authorization: Bearer ${CRON_SECRET}"             "${BACKEND_URL%/}/api/cron/patrol")
-          echo "${response}"
-          python -c 'import json,sys; x=json.loads(sys.stdin.read()); raise SystemExit(0 if x.get("ok") else 1)' <<< "${response}"
