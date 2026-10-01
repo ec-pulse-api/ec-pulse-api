@@ -12,7 +12,9 @@ spec.loader.exec_module(server)
 
 class RouteMappingTests(unittest.TestCase):
     def assert_call(self, name, args, expected_method, expected_path, expected_body=None, expected_query=None):
-        with patch.object(server, "_api_request", return_value={"ok": True}) as mocked:
+        with patch.object(server, "_api_request", return_value={"ok": True}) as mocked, patch.object(
+            server.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]
+        ):
             result = server._call_tool(name, args)
         self.assertEqual(result, {"ok": True})
         mocked.assert_called_once()
