@@ -43,11 +43,46 @@ jobs:
             python -m unittest discover -s plugins/ec-pulse/tests -v
           } 2>&1 | tee patrol-deterministic.log
 
+      - name: Prepare isolated patrol branch
+        id: branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            target="${{ github.event.pull_request.head.ref }}"
+          else
+            target="main"
+          fi
+          branch="patrol/repair-${GITHUB_RUN_ID}"
+          git fetch origin "$target"
+          git checkout -B "$branch" "origin/$target"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
       - name: Run self-contained Patrol AI
         id: patrol
         run: |
           set -o pipefail
           python scripts/ec_pulse_patrol.py | tee patrol-report.json
+
+      - name: Persist safe repairs as a PR
+        id: persist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .gitignore
+          git commit -m "chore: persist safe Patrol AI repairs"
+          git push --set-upstream origin "${{ steps.branch.outputs.branch }}"
+          gh pr create --base "${{ steps.branch.outputs.target }}" --head "${{ steps.branch.outputs.branch }}" --title "chore: persist safe Patrol AI repairs" --body "Automated Patrol AI repair branch. Mechanical repairs only; no automatic merge."
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Re-audit after repair
         id: reaudit
