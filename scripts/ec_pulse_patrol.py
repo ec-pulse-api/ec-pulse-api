@@ -70,7 +70,8 @@ def main():
     tests=ROOT/"plugins/ec-pulse/tests"
     if tests.exists():
         code,out,err=run(sys.executable,"-m","unittest","discover","-s",str(tests),"-v")
-        check("plugin-tests",code==0,"plugin tests pass" if code==0 else "plugin tests failed")
+        test_detail = "plugin tests pass" if code == 0 else ("plugin tests failed: " + ((err or out).strip()[-1200:] or "no test output"))
+        check("plugin-tests",code==0,test_detail)
     else:
         check("plugin-tests",False,"test directory missing")
 
