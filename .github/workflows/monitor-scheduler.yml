@@ -1,0 +1,77 @@
+name: EC Pulse Monitor Scheduler
+# Vercel Hobby permits only daily cron jobs. Run the 5-minute monitor sweep from GitHub Actions.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ec-pulse-monitor-scheduler
+  cancel-in-progress: false
+
+jobs:
+  check-monitors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Run monitor sweep
+        env:
+          BACKEND_URL: ${{ secrets.EC_PULSE_API_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BACKEND_URL}" ] || [ -z "${CRON_SECRET}" ]; then
+            printf '%s\n' '{"ok":false,"status":"SKIPPED","reason":"EC_PULSE_API_URL or CRON_SECRET is not configured"}' > monitor-report.json
+            {
+              echo "## EC Pulse monitor sweep"
+              echo
+              echo "**Status:** SKIPPED — configure repository secrets `EC_PULSE_API_URL` and `CRON_SECRET`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Monitor sweep SKIPPED: required repository secrets are missing."
+            exit 0
+          fi
+
+          if ! response=$(curl --fail-with-body --silent --show-error --max-time 120 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${BACKEND_URL%/}/api/cron/check-monitors"); then
+            printf '%s\n' '{"ok":false,"status":"FAIL","reason":"monitor_sweep_request_failed"}' > monitor-report.json
+            echo "Monitor sweep request failed." >&2
+            exit 1
+          fi
+
+          printf '%s\n' "${response}" > monitor-report.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path("monitor-report.json").read_text(encoding="utf-8"))
+          status = "PASS" if report.get("ok") is True else "FAIL"
+          checked = report.get("checked", "n/a")
+          changed = report.get("changed", "n/a")
+          failed = report.get("failed", "n/a")
+          delivered = report.get("webhooks_delivered", "n/a")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(
+                  "## EC Pulse monitor sweep\n\n"
+                  f"**Status:** {status}\n\n"
+                  f"- Checked: {checked}\n"
+                  f"- Changed: {changed}\n"
+                  f"- Failed: {failed}\n"
+                  f"- Webhooks delivered: {delivered}\n"
+              )
+          print(f"monitor sweep status={status} checked={checked} changed={changed} failed={failed} webhooks_delivered={delivered}")
+          if report.get("ok") is not True:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload monitor report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ec-pulse-monitor-report
+          path: monitor-report.json
+          if-no-files-found: ignore

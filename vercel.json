@@ -16,10 +16,6 @@
     {
       "path": "/api/cron/patrol",
       "schedule": "0 4 * * *"
-    },
-    {
-      "path": "/api/cron/check-monitors",
-      "schedule": "*/5 * * * *"
     }
   ]
 }

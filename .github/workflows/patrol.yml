@@ -33,20 +33,27 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${BACKEND_URL}" ]; then
-            echo "EC_PULSE_API_URL is not configured; production health check is NOT VERIFIED."
+            printf '%s\n' '{"status":"SKIPPED","reason":"EC_PULSE_API_URL is not configured"}' > health-report.json
+            echo "Production health check SKIPPED: EC_PULSE_API_URL is not configured."
             exit 0
           fi
+
           for attempt in 1 2 3; do
-            if curl --fail-with-body --silent --show-error --max-time 30 "${BACKEND_URL%/}/health"; then
+            if curl --fail-with-body --silent --show-error --max-time 30 \
+              "${BACKEND_URL%/}/health" >/dev/null; then
+              printf '{"status":"PASS","attempt":%s}\n' "${attempt}" > health-report.json
+              echo "Production health check passed on attempt ${attempt}."
               exit 0
             fi
             if [ "${attempt}" -lt 3 ]; then
-              echo "health check failed (attempt ${attempt}/3); retrying..." >&2
+              echo "Health check failed (attempt ${attempt}/3); retrying in 5 seconds..." >&2
               sleep 5
             fi
           done
-          echo "production health check could not be verified." >&2
-          exit 0
+
+          printf '%s\n' '{"status":"FAIL","reason":"health_check_failed_after_3_attempts"}' > health-report.json
+          echo "Production health check failed after 3 attempts." >&2
+          exit 1
 
       - name: Run production AI patrol
         env:
@@ -55,12 +62,21 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${BACKEND_URL}" ] || [ -z "${CRON_SECRET}" ]; then
-            echo "Production AI patrol is NOT VERIFIED: EC_PULSE_API_URL or CRON_SECRET is not configured."
+            printf '%s\n' '{"ok":false,"status":"SKIPPED","reason":"EC_PULSE_API_URL or CRON_SECRET is not configured"}' > runtime-patrol-report.json
+            echo "Production AI patrol SKIPPED: EC_PULSE_API_URL or CRON_SECRET is not configured."
             exit 0
           fi
-          response=$(curl --fail-with-body --silent --show-error --max-time 120             -H "Authorization: Bearer ${CRON_SECRET}"             "${BACKEND_URL%/}/api/cron/patrol")
-          echo "${response}" > runtime-patrol-report.json
-          python -c 'import json; x=json.load(open("runtime-patrol-report.json", encoding="utf-8")); print("runtime patrol ok:", x.get("ok")); print("repairs:", x.get("repairs", [])); print("failures:", x.get("failures", [])); raise SystemExit(0 if x.get("ok") else 1)'
+
+          if ! response=$(curl --fail-with-body --silent --show-error --max-time 120 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${BACKEND_URL%/}/api/cron/patrol"); then
+            printf '%s\n' '{"ok":false,"status":"FAIL","reason":"production_patrol_request_failed"}' > runtime-patrol-report.json
+            echo "Production AI patrol request failed." >&2
+            exit 1
+          fi
+
+          printf '%s\n' "${response}" > runtime-patrol-report.json
+          python -c 'import json; x=json.load(open("runtime-patrol-report.json", encoding="utf-8")); print("runtime patrol status:", x.get("status", "UNKNOWN")); print("runtime patrol ok:", x.get("ok")); print("repairs:", x.get("repairs", [])); print("failures:", x.get("failures", [])); raise SystemExit(0 if x.get("ok") is True else 1)'
 
       - name: Upload patrol reports
         if: always()
@@ -69,5 +85,6 @@ jobs:
           name: ec-pulse-patrol-report
           path: |
             patrol-report.json
+            health-report.json
             runtime-patrol-report.json
           if-no-files-found: ignore
