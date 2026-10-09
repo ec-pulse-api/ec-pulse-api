@@ -1,5 +1,6 @@
 name: EC Pulse Patrol AI
 # Manual/PR-triggered security and reliability patrol. Scheduled runs are intentionally disabled to avoid noisy recurring failures.
+# Enable the Claude step only after installing the Claude Code GitHub App and configuring ANTHROPIC_API_KEY.
 
 on:
   workflow_dispatch:
@@ -24,7 +25,7 @@ jobs:
   patrol:
     runs-on: ubuntu-latest
     env:
-      HAS_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      ENABLE_CLAUDE_PATROL: ${{ vars.EC_PULSE_CLAUDE_CODE_APP_INSTALLED == 'true' && secrets.ANTHROPIC_API_KEY != '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -44,7 +45,7 @@ jobs:
           } 2>&1 | tee patrol-deterministic.log
 
       - name: Run Patrol AI
-        if: ${{ env.HAS_ANTHROPIC_API_KEY == 'true' }}
+        if: ${{ env.ENABLE_CLAUDE_PATROL == 'true' }}
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -80,8 +81,8 @@ jobs:
             --allowedTools "Read,Edit,Write,Glob,Grep,Bash(python:*),Bash(git:*),Bash(gh issue:*),Bash(gh pr:*),Bash(gh api:*)"
 
       - name: Explain skipped AI patrol
-        if: ${{ env.HAS_ANTHROPIC_API_KEY != 'true' }}
-        run: echo "AI repair step SKIPPED because ANTHROPIC_API_KEY is not configured; deterministic checks will still be enforced."
+        if: ${{ env.ENABLE_CLAUDE_PATROL != 'true' }}
+        run: echo "AI repair step SKIPPED. Set repository variable EC_PULSE_CLAUDE_CODE_APP_INSTALLED=true only after installing the Claude Code GitHub App, and configure ANTHROPIC_API_KEY. Deterministic checks remain enforced."
 
       - name: Re-run deterministic checks after Patrol AI
         if: always()
